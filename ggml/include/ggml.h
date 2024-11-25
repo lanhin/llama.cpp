@@ -529,6 +529,8 @@ extern "C" {
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
         GGML_OP_OPT_STEP_ADAMW,
 
+        GGML_OP_GEMV_PAR, // for PIM parallel gemv
+
         GGML_OP_COUNT,
     };
 
@@ -1189,6 +1191,18 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_gemv_par(
+            struct ggml_context * ctx,
+            struct ggml_tensor * w_q,
+            struct ggml_tensor * w_k,
+            struct ggml_tensor * w_v,
+            struct ggml_tensor * cur,
+            struct ggml_tensor ** none_q,
+            struct ggml_tensor ** none_k,
+            struct ggml_tensor ** none_v,
+            int parallelism,
+            int layer_idx );
 
     // change the precision of a matrix multiplication
     // set to GGML_PREC_F32 for higher precision (useful for phi-2)

@@ -77,6 +77,7 @@
 #include <numeric>
 #include <set>
 #include <sstream>
+#include <iostream>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
@@ -9252,6 +9253,37 @@ static void llm_build_kv_store(
     cb(v_cache_view, "v_cache_view", il);
 
     ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur, v_cache_view));
+}
+
+static struct ggml_tensor * llm_build_par_gemv_op(
+	   struct ggml_context * ctx,
+	   struct ggml_tensor * w_q,
+	   struct ggml_tensor * w_k,
+	   struct ggml_tensor * w_v,
+	   struct ggml_tensor * cur,
+	   struct ggml_tensor ** none_q,
+	   struct ggml_tensor ** none_k,
+	   struct ggml_tensor ** none_v,
+	   int parallelism,
+	   int layer_idx ) {
+    GGML_ASSERT(parallelism == 2 || parallelism == 3);
+
+    GGML_ASSERT(none_q != NULL);
+    GGML_ASSERT(none_k != NULL);
+
+    *none_q = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
+    *none_k = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
+    (*none_q)->op = GGML_OP_NONE;
+    (*none_k)->op = GGML_OP_NONE;
+
+    struct ggml_tensor * par_tensor = ggml_gemv_par(ctx, w_q, w_k, w_v, cur, none_q, none_k, none_v, parallelism, layer_idx);
+    if (parallelism == 3) {
+        GGML_ASSERT(none_v != NULL);
+        *none_v = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
+        (*none_v)->op = GGML_OP_NONE;
+    }
+
+    return par_tensor;
 }
 
 // do mat_mul, while optionally apply lora

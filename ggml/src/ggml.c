@@ -3066,9 +3066,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS",
     "CROSS_ENTROPY_LOSS_BACK",
     "OPT_STEP_ADAMW",
+    "PIM_PAR_GEMV",
 };
 
-static_assert(GGML_OP_COUNT == 81, "GGML_OP_COUNT != 81");
+static_assert(GGML_OP_COUNT == 82, "GGML_OP_COUNT != 82");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -3161,9 +3162,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss(x,y)",
     "cross_entropy_loss_back(x,y)",
     "adamw(x)",
+    "par_gemv(x1, x2, ..., y1, y2, ...)",
 };
 
-static_assert(GGML_OP_COUNT == 81, "GGML_OP_COUNT != 81");
+static_assert(GGML_OP_COUNT == 82, "GGML_OP_COUNT != 82");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5651,6 +5653,44 @@ struct ggml_tensor * ggml_mul_mat(
     result->src[1] = b;
 
     return result;
+}
+
+struct ggml_tensor * ggml_gemv_par(
+           struct ggml_context * ctx,
+           struct ggml_tensor * w_q,
+           struct ggml_tensor * w_k,
+           struct ggml_tensor * w_v,
+           struct ggml_tensor * cur,
+           struct ggml_tensor ** none_q,
+           struct ggml_tensor ** none_k,
+           struct ggml_tensor ** none_v,
+           int parallelism,
+           int layer_idx ) {
+    // Fix the check as gemv
+    GGML_ASSERT(ggml_can_mul_mat(w_q, cur));
+    GGML_ASSERT(!ggml_is_transposed(w_q));
+    GGML_ASSERT(ggml_can_mul_mat(w_k, cur));
+    GGML_ASSERT(!ggml_is_transposed(w_k));
+
+    struct ggml_tensor * par_tensor = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
+
+    par_tensor->op = GGML_OP_GEMV_PAR;
+    par_tensor->src[0] = cur;
+    par_tensor->src[1] = w_q;
+    par_tensor->src[2] = w_k;
+    par_tensor->src[4] = *none_q;
+    par_tensor->src[5] = *none_k;
+    // set params for parallelism and layer index
+    ggml_set_op_params_i32(par_tensor, 0, parallelism);
+    ggml_set_op_params_i32(par_tensor, 1, layer_idx);
+
+    if (parallelism == 3) {
+        GGML_ASSERT(ggml_can_mul_mat(w_v, cur));
+        GGML_ASSERT(!ggml_is_transposed(w_v));
+        par_tensor->src[3] = w_v;
+        par_tensor->src[6] = *none_v;
+    }
+    return par_tensor;
 }
 
 void ggml_mul_mat_set_prec(
@@ -17212,6 +17252,37 @@ static void ggml_compute_forward_opt_step_adamw(
             }
     }
 }
+
+static int dpu_launch_gemv_async(
+        const struct ggml_tensor * input,
+        const struct ggml_tensor * w_i,
+        struct ggml_tensor * res_i) {
+    // TODO: to implement
+    return 0;
+}
+
+static int dpu_kernel_barrier() {
+    // TODO: to implement
+    return 0;
+}
+
+static void ggml_compute_forward_gemv_par(
+        const struct ggml_compute_params * params,
+        struct ggml_tensor * dst) {
+    // get parallel param
+    int parallelism = ggml_get_op_params_i32(dst, 0);
+    // get layer index
+    int layer_idx = ggml_get_op_params_i32(dst, 1);
+
+    const struct ggml_tensor * input = dst->src[0];
+    for (int i = 1; i <= parallelism; i++) {
+        const struct ggml_tensor * w_i = dst->src[i];
+        struct ggml_tensor * res_i = dst->src[i + 3];
+        dpu_launch_gemv_async(input, w_i, res_i);
+    }
+    dpu_kernel_barrier();
+}
+
 /////////////////////////////////
 
 static void ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor) {
@@ -17564,6 +17635,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_OPT_STEP_ADAMW:
             {
                 ggml_compute_forward_opt_step_adamw(params, tensor);
+            }
+            break;
+        case GGML_OP_GEMV_PAR:
+            {
+                ggml_compute_forward_gemv_par(params, tensor);
             }
             break;
         case GGML_OP_NONE:
