@@ -209,6 +209,21 @@
 #include <stdint.h>
 #include <stdio.h>
 
+//#ifdef PIM_ENABLED
+
+//#ifdef __cplusplus
+//extern "C" {
+//#endif
+
+//#include <dpu.h>
+//#include <dpu_log.h>
+
+//#ifdef __cplusplus
+//}
+//#endif
+
+//#endif
+
 #define GGML_FILE_MAGIC   0x67676d6c // "ggml"
 #define GGML_FILE_VERSION 2
 
@@ -574,6 +589,23 @@ extern "C" {
         GGML_TENSOR_FLAG_LOSS   =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
     };
 
+#define PIM_ENABLED 1
+#ifdef PIM_ENABLED
+    #define MAX_PIM_DPU_NUM  128
+		enum PIM_DATA_TYPE {
+            PIM_TENSOR = 1,
+			PIM_BROADCAST = 2,
+			PIM_TILING = 3,
+			NO_PIM = 10,
+		};
+
+		enum PIM_ID {
+	        PIM_WQ = 1,
+			PIM_WK = 2,
+			PIM_WV = 3,
+			PIM_INVAILD = 10,
+		};	
+#endif
     // n-dimensional tensor
     struct ggml_tensor {
         enum ggml_type type;
@@ -581,8 +613,22 @@ extern "C" {
         GGML_DEPRECATED(enum ggml_backend_type backend, "use the buffer type to find the storage location of the tensor");
 
         struct ggml_backend_buffer * buffer;
+		/*
+		 假设：ne[0] = 4096,ne[1] = 4096,ne[2] = 1,ne[3] = 1
+		 INT8: nb[0] = sizeof(int8_t) = 1,nb[1] = 1*(4096/1) = 4096,nb[2] = nb[1]*ne[1]=4096*4096=16M,nb[3]=nb[2]*ne[2]=16M*1=16M
+		 Q4_0: nb[0] = sizeof(block_q4_0) = 18,nb[1] = 18*(4096/32) = 2304,nb[2] = nb[1]*ne[1]=4096*2304=9437184,nb[3]=nb[2]*ne[2]=9437184*1=9437184
+		*/
 
         int64_t ne[GGML_MAX_DIMS]; // number of elements
+        /*
+        blksize = ggml_blck_size(GGML_TYPE_Q4_0) = 32
+        //nb[0]:量化后每个结构体的大小
+        typesize = nb[0] = ggml_type_size(GGML_TYPE_Q4_0) = sizeof(block_q4_0) = 18
+        //nb[1]:量化后每个行/列的大小
+        nb[1] = nb[0]   * (ne[0] / ggml_blck_size(type)) + padding
+        //nb[2]:量化后整个矩阵的大小
+        nb[2] = nb[1]   * ne[1]
+		*/
         size_t  nb[GGML_MAX_DIMS]; // stride in bytes:
                                    // nb[0] = ggml_type_size(type)
                                    // nb[1] = nb[0]   * (ne[0] / ggml_blck_size(type)) + padding
@@ -609,6 +655,30 @@ extern "C" {
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
+#ifdef PIM_ENABLED
+        // data to dpu set
+        struct dpu_set_t *pdpu_set;
+
+        /*利用llama_context获取pim metadata信息*/
+        //struct llama_context *pctx;
+        struct pim_context_map *ppim_context;
+
+		void *padding;
+
+        // weight是否load到DPU标志
+		enum PIM_ID pimid;
+		
+        //Commond Param to DPU
+        //char param_name[20];
+
+        /* data to dpu type: 
+           0:BroadCast 
+           1:Tiling to all dpu
+        */ 
+        //enum PIM_DATA_TYPE pim_type[PIM_SOURCE_NUM]; 
+        enum PIM_DATA_TYPE pim_type; 
+
+#endif
         // char padding[4];
     };
 

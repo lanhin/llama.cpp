@@ -118,6 +118,11 @@ GGML_OPENBLAS := 1
 DEPRECATE_WARNING := 1
 endif
 
+ifdef LLAMA_PIM
+PIM_ENABLED := 1
+DEPRECATE_WARNING := 1
+endif
+
 ifdef LLAMA_OPENBLAS64
 GGML_OPENBLAS64 := 1
 DEPRECATE_WARNING := 1
@@ -553,10 +558,17 @@ ifndef GGML_NO_OPENMP
 	endif # GGML_MUSA
 endif # GGML_NO_OPENMP
 
+ifdef PIM_ENABLED
+	MK_CPPFLAGS += -DPIM_ENABLED  --std=c++11  `dpu-pkg-config --cflags --libs dpu` -I~/upmem-2023.2.0-Linux-x86_64/include/dpu/
+	MK_CFLAGS   += -DPIM_ENABLED  -Wall -Wextra  `dpu-pkg-config --cflags --libs dpu` -I~/upmem-2023.2.0-Linux-x86_64/include/dpu/
+	MK_LDFLAGS  += -ldpu -L/home/liji/upmem-2023.2.0-Linux-x86_64/lib/
+	#MK_LDFLAGS  += $(shell dpu-pkg-config  --libs dpu) -ldpu -L/home/liji/upmem-2023.2.0-Linux-x86_64/lib/
+endif # PIM_ENABLED
+
 ifdef GGML_OPENBLAS
-	MK_CPPFLAGS += -DGGML_USE_BLAS $(shell pkg-config --cflags-only-I openblas)
+	MK_CPPFLAGS += -DGGML_USE_BLAS -DPIM_ENABLED $(shell pkg-config --cflags-only-I openblas) -I/usr/local/OpenBLAS/include 
 	MK_CFLAGS   += $(shell pkg-config --cflags-only-other openblas)
-	MK_LDFLAGS  += $(shell pkg-config --libs openblas)
+	MK_LDFLAGS  += $(shell pkg-config --libs openblas) -lopenblas -L/usr/local/OpenBLAS/lib/ 
 	OBJ_GGML    += ggml/src/ggml-blas.o
 endif # GGML_OPENBLAS
 
@@ -1018,6 +1030,7 @@ $(info   - LLAMA_RPC)
 $(info   - LLAMA_SYCL)
 $(info   - LLAMA_SYCL_F16)
 $(info   - LLAMA_OPENBLAS)
+$(info   - LLAMA_PIM)
 $(info   - LLAMA_OPENBLAS64)
 $(info   - LLAMA_BLIS)
 $(info   - LLAMA_NO_LLAMAFILE)

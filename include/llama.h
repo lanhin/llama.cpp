@@ -9,6 +9,15 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+#include <dpu.h>
+#include <dpu_log.h>
+#ifdef __cplusplus
+}
+#endif
+
 #ifdef LLAMA_SHARED
 #    if defined(_WIN32) && !defined(__MINGW32__)
 #        ifdef LLAMA_BUILD
@@ -46,6 +55,78 @@
 #define LLAMA_STATE_SEQ_MAGIC   LLAMA_FILE_MAGIC_GGSQ
 #define LLAMA_STATE_SEQ_VERSION 2
 
+#ifdef PIM_ENABLED
+#define LAYERNUM 32
+	
+	struct pim_meta {
+	/*
+		// 每个类型的tensor在DPU中的metadata
+		uint16_t layer_num;
+		uint16_t weight_type;
+		uint32_t size_per_row;
+		//uint32_t rownum_per_layer[LAYERNUM];
+		uint32_t rest_row;
+		uint32_t layer_offset;
+		//uint32_t layer_offset[LAYERNUM];
+		// 每一层串行计算，dpu的返回值只需一个地址空间
+		uint32_t response_offset;
+		uint32_t response_len;
+		*/
+		// 每个类型的tensor在DPU中的metadata
+		uint16_t layer_num;
+		uint16_t weight_type;
+		uint16_t rows_per_dpu;
+		uint16_t rest_rows;
+		uint32_t size_per_row;
+		uint32_t layer_len;
+		// 每一层串行计算，dpu的返回值只需一个地址空间
+		uint32_t response_offset;
+		uint32_t response_len;
+		// 每一层串行计算，dpu的输入也只需要一个地址空间
+		uint32_t input_offset;
+		uint32_t input_len; 
+		int64_t ne[GGML_MAX_DIMS];
+		size_t	nb[GGML_MAX_DIMS];
+	};
+	
+	struct pim_context {
+		//#define DPU_MRAM_HEAP_POINTER_NAME
+		struct dpu_set_t dpu_set;
+		char param_name[20];
+		uint32_t pim_type;
+		//uint32_t q_dpu_offset = 0;
+		uint32_t weightq_load_flag;
+	
+		struct pim_meta pim_metadata;
+	
+	/*
+		// 每个类型的tensor在DPU中的metadata
+		uint16_t layer_num;
+		uint16_t weight_type;
+		uint32_t size_per_row;
+		uint32_t rownum_per_layer[LAYERNUM];
+		uint32_t layer_offset[LAYERNUM];
+		// 每一层串行计算，dpu的返回值只需一个地址空间
+		uint32_t response_offset_per_layer;
+		uint32_t response_len_per_layer;	
+	*/
+		/*
+		uint32_t rownum_per_layer[LAYERNUM];
+		uint32_t layer_offset[LAYERNUM];
+		uint32_t response_offset_per_layer[LAYERNUM];
+		uint32_t response_len_per_layer[LAYERNUM];	
+		*/
+	};
+	
+	//typedef std::map<enum PIM_ID,struct pim_context *>MAP_PIMContext;
+	struct pim_context_map {
+		uint8_t invalid;
+		enum PIM_ID pim_id;
+		struct pim_context *pimcontext;
+	};
+#endif
+
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -60,6 +141,9 @@ extern "C" {
     struct llama_model;
     struct llama_context;
     struct llama_sampler;
+  
+    struct pim_context_map;
+    struct pim_context;
 
     typedef int32_t llama_pos;
     typedef int32_t llama_token;
@@ -422,6 +506,11 @@ extern "C" {
     LLAMA_API struct llama_context * llama_new_context_with_model(
                      struct llama_model * model,
             struct llama_context_params   params);
+
+#ifdef PIM_ENABLED	
+	LLAMA_API int llama_load2dpu(struct llama_context *pctx,struct llama_model * model);
+
+#endif
 
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);

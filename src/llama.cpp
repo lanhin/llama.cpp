@@ -81,6 +81,15 @@
 #include <type_traits>
 #include <unordered_map>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+#include <dpu.h>
+#include <dpu_log.h>
+#ifdef __cplusplus
+}
+#endif
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
@@ -3368,6 +3377,13 @@ struct llama_context {
     struct ggml_tensor * inp_pos_bucket;    // I32 [n_batch|n_kv, n_batch]
     struct ggml_tensor * inp_embd_enc;      // F32 [n_embd, n_outputs_enc]
     struct ggml_tensor * inp_KQ_mask_cross; // F32 [n_outputs_enc, n_batch]
+
+#ifdef PIM_ENABLED
+    #define PIM_CONTEXT_MAX 10
+    struct pim_context q_pim_context;
+    //MAP_PIMContext pim_tensor_context;
+	struct pim_context_map pim_context_array[PIM_CONTEXT_MAX];
+#endif
 };
 
 struct llama_lora_weight {
@@ -4891,7 +4907,16 @@ struct llama_model_loader {
             return NULL;
         }
 
-        return create_tensor_for(ctx, cur, flags & TENSOR_DUPLICATED);
+        //return create_tensor_for(ctx, cur, flags & TENSOR_DUPLICATED);
+        struct ggml_tensor * tensor = create_tensor_for(ctx, cur, flags & TENSOR_DUPLICATED);
+
+ 		#ifdef PIM_ENABLED
+            tensor->pdpu_set = NULL;
+		    tensor->pimid = PIM_INVAILD;
+			tensor->pim_type = NO_PIM;
+		#endif
+
+        return tensor;       
     }
 
     struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true) {
@@ -9276,8 +9301,154 @@ static struct ggml_tensor * llm_build_lora_mm(
         ab_cur = ggml_scale(ctx0, ab_cur, scale);
         res = ggml_add(ctx0, res, ab_cur);
     }
+
+    /*Tiling: preload to PIM-DDR
+      Broadcast:*/
+#ifdef PIM_ENABLED
+    if (w->pim_type == PIM_TILING) {
+        cur->pim_type = PIM_BROADCAST;
+        res->pim_type = PIM_TENSOR;
+    }
+#endif
     return res;
 }
+
+#ifdef PIM_ENABLED		  
+
+typedef struct {
+    int type;
+	//uint32_t totalsize;
+	uint32_t blocknum;
+	uint32_t blocksize; // make sure all block'size is same 
+}dpu_arguments_t;
+
+// do pim mat_mul
+/*
+Weight in DPU MRAM:
+|--DPU0-Metadata--  |--layer0-subweight0--pading--  |--layer1-subweight0--pading--  |...|--layer31-subweight0--pading--  |---response(婢舵艾鐪版径宥囨暏)--pading--|--input-metadata--|--input-token--| 
+|--DPU1-Metadata--  |--layer0-subweight1--pading--  |--layer1-subweight1--pading--  |...|--layer31-subweight1--pading--  |---response(婢舵艾鐪版径宥囨暏)--pading--|--input-metadata--|--input-token--|
+......
+|--DPU127-Metadata--|--layer0-subweight127--pading--|--layer1-subweight127--pading--|...|--layer31-subweight127--pading--|---response(婢舵艾鐪版径宥囨暏)--pading--|--input-metadata--|--input-token--|
+
+*/
+int llama_load2dpu(struct llama_context *pctx,llama_model * model) {
+    #define NR_DPUS 128
+    #define DPU_BINARY "/home/yuanqi/llama.cpp/dpu/gemv_dpu"
+    uint32_t nr_of_dpus;
+	// Allocate DPUs and load binary
+	//memset(&ctx->q_pim_context,0,sizeof(struct pim_context));
+	//DPU_ASSERT(dpu_alloc(NR_DPUS, NULL, &ctx->q_pim_context.dpu_set));
+	//DPU_ASSERT(dpu_load(ctx->q_pim_context.dpu_set, DPU_BINARY, NULL));
+
+    // WQ-PIM allocate dpu
+	struct pim_context *pqcontext = (struct pim_context *)malloc(sizeof(struct pim_context));
+	memset(pqcontext,0,sizeof(struct pim_context));
+	DPU_ASSERT(dpu_alloc(NR_DPUS, NULL, &pqcontext->dpu_set));
+	
+	//DPU_ASSERT(dpu_load(pqcontext->dpu_set, DPU_BINARY, NULL));
+	// WQID = 1
+    //pctx->pim_tensor_context.insert(std::pair<enum PIM_ID ,struct pim_context *>(PIM_WQ,pqcontext));
+    pctx->pim_context_array[PIM_WQ].invalid = 1;
+	pctx->pim_context_array[PIM_WQ].pim_id = PIM_WQ;
+	pctx->pim_context_array[PIM_WQ].pimcontext = pqcontext;
+
+    // WQ metadata is loaded to dpu WRAM, make WQ's param in every layer is same
+	struct dpu_set_t dpu;
+	uint32_t n_layer = model->layers.size();
+	uint32_t il = 0,i,metadataoffset = 0;
+	//dpu_get_nr_dpus(pqcontext->dpu_set, &nr_of_dpus);
+	pqcontext->pim_metadata.layer_num = n_layer;
+	pqcontext->pim_metadata.weight_type = (uint16_t)(model->layers[il].wq->type);
+	memcpy(pqcontext->pim_metadata.ne,model->layers[il].wq->ne,sizeof(pqcontext->pim_metadata.ne));
+	pqcontext->pim_metadata.ne[1] = model->layers[il].wq->ne[1] / nr_of_dpus;
+
+	memcpy(pqcontext->pim_metadata.nb,model->layers[il].wq->nb,sizeof(pqcontext->pim_metadata.nb));
+    pqcontext->pim_metadata.nb[0] = model->layers[il].wq->nb[0];
+    // maybe has problem?
+	pqcontext->pim_metadata.nb[1] = model->layers[il].wq->nb[0] * (pqcontext->pim_metadata.ne[0] / ggml_blck_size(model->layers[il].wq->type));
+	pqcontext->pim_metadata.nb[2] = model->layers[il].wq->nb[1] * pqcontext->pim_metadata.ne[1];
+	
+	pqcontext->pim_metadata.size_per_row = model->layers[il].wq->nb[1];
+	pqcontext->pim_metadata.rows_per_dpu = model->layers[il].wq->ne[1] / nr_of_dpus;
+	pqcontext->pim_metadata.rest_rows = model->layers[il].wq->ne[1] % nr_of_dpus;
+	pqcontext->pim_metadata.layer_len = pqcontext->pim_metadata.size_per_row * (pqcontext->pim_metadata.rows_per_dpu + 1);
+	pqcontext->pim_metadata.response_offset = pqcontext->pim_metadata.layer_len * n_layer;
+    //8 Bytes align
+	if (pqcontext->pim_metadata.response_offset & 0x3) {
+        pqcontext->pim_metadata.response_offset = pqcontext->pim_metadata.response_offset & 0xFFFFFFF8 + 0x8;
+	}
+	// 8 Bytes align
+	pqcontext->pim_metadata.response_len = (pqcontext->pim_metadata.rows_per_dpu + 1) * sizeof(uint32_t);
+	if (pqcontext->pim_metadata.response_len & 0x3) {
+        pqcontext->pim_metadata.response_len = pqcontext->pim_metadata.response_len & 0xFFFFFFF8 + 0x8;
+	}
+	
+	pqcontext->pim_metadata.input_offset = pqcontext->pim_metadata.response_offset + pqcontext->pim_metadata.response_len;
+#if 0
+	DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
+		// transfer to dpu
+		DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, (void *)(&pqcontext->pim_metadata)));
+	}
+	DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, 0, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
+	//DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, "DPU_INPUT_ARGUMENTS", 0, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
+    metadataoffset = sizeof(struct pim_meta);
+    // load WQ weight data to dpu MRAM
+    // row is  transposed
+    uint32_t layerid;
+    for (layerid = 0; layerid < n_layer; layerid++) {
+		ggml_tensor * w = model->layers[layerid].wq;
+        w->pim_type = PIM_TILING;
+		uint32_t rows_per_dpu = w->ne[1] / nr_of_dpus;
+		uint32_t size_per_row = w->nb[1];
+	    uint32_t rest_rows = w->ne[1] % nr_of_dpus;
+		// make sure every layer's transform weight is same,offset=size_per_row*(row_per_dpu+1)
+		uint32_t layeroffset = size_per_row * (rows_per_dpu + 1);
+		//lctx.q_pim_context.pim_metadata.layer_offset[layerid] = layerid * layeroffset;
+
+		// row is send to dpu
+		DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
+			uint32_t max_rows_per_dpu;
+	        uint32_t prev_rows_dpu = 0;	   	
+			
+			if (rest_rows > 0) {
+	            if (i >= rest_rows)
+	                prev_rows_dpu = i * (rows_per_dpu + 1) + rest_rows;
+	            else
+	                prev_rows_dpu = i * (rows_per_dpu + 1);
+			} else {
+					prev_rows_dpu = i * rows_per_dpu;
+			}
+
+			// every dpu's data
+	        DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, ((unsigned char *)w->data) + prev_rows_dpu*size_per_row));
+	    }
+
+		DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, metadataoffset + layeroffset*layerid, rows_per_dpu * size_per_row, DPU_XFER_DEFAULT));
+
+		//rest data is send to dpu
+		if (rest_rows > 0) {
+	        DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
+	            uint32_t max_rows_per_dpu;
+		        uint32_t prev_rows_dpu = 0;	   	
+							
+	            if (i < rest_rows)
+	                prev_rows_dpu = i * (rows_per_dpu + 1) + rows_per_dpu;
+				else
+					continue;      
+
+				// every dpu's data
+	            DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, w->data + prev_rows_dpu*size_per_row));
+	        }
+	     
+			DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, metadataoffset + layeroffset*layerid + size_per_row*rows_per_dpu, size_per_row, DPU_XFER_DEFAULT));
+		}
+	  
+		//printf("load weight W:%p\n",w);   		
+    }   
+    #endif  
+	return 0;
+}
+#endif
 
 // do mat_mul_id, while optionally apply lora
 static struct ggml_tensor * llm_build_lora_mm_id(
@@ -10540,6 +10711,10 @@ struct llm_build_context {
 
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+                #ifdef PIM_ENABLED
+				    Qcur->ppim_context = lctx.pim_context_array;
+				    Qcur->pimid = PIM_WQ;
+				#endif                
                 cb(Qcur, "Qcur", il);
                 if (model.layers[il].bq) {
                     Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
