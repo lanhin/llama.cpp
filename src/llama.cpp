@@ -9276,12 +9276,13 @@ static struct ggml_tensor * llm_build_par_gemv_op(
     (*none_q)->op = GGML_OP_NONE;
     (*none_k)->op = GGML_OP_NONE;
 
-    struct ggml_tensor * par_tensor = ggml_gemv_par(ctx, w_q, w_k, w_v, cur, none_q, none_k, none_v, parallelism, layer_idx);
     if (parallelism == 3) {
         GGML_ASSERT(none_v != NULL);
         *none_v = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
         (*none_v)->op = GGML_OP_NONE;
     }
+
+    struct ggml_tensor * par_tensor = ggml_gemv_par(ctx, w_q, w_k, w_v, cur, none_q, none_k, none_v, parallelism, layer_idx);
 
     return par_tensor;
 }
@@ -9388,6 +9389,43 @@ static struct ggml_tensor * llm_build_ffn(
           llm_ffn_gate_type   type_gate,
          const llm_build_cb & cb,
                         int   il) {
+#ifdef PIM_KERNEL
+    GGML_ASSERT(up != NULL && gate != NULL);
+    // only consider LLM_FFN_PAR for PIM
+    GGML_ASSERT(type_gate == LLM_FFN_PAR);
+    struct ggml_tensor * tmp;
+    struct ggml_tensor * tmp_gate;
+    cur = llm_build_par_gemv_op(ctx, up, gate, NULL, cur, &tmp, &tmp_gate, NULL, 2, il);
+    cb(tmp, "ffn_up", il);
+    cb(tmp_gate, "ffn_gate", il);
+
+    // add par_op into gf so that it won't gets lost
+    ggml_build_forward_expand(gf, cur);
+
+    cur = tmp_gate;
+
+    if (up_b) {
+        tmp = ggml_add(ctx, tmp, up_b);
+        cb(tmp, "ffn_up_b", il);
+    }
+
+    if (up_s) {
+        tmp = ggml_mul(ctx, tmp, up_s);
+        cb(tmp, "ffn_up_s", il);
+    }
+
+    if (gate_b) {
+        cur = ggml_add(ctx, cur, gate_b);
+        cb(cur, "ffn_gate_b", il);
+    }
+
+    if (gate_s) {
+        cur = ggml_mul(ctx, cur, gate_s);
+        cb(cur, "ffn_gate_s", il);
+    }
+
+#else
+
     struct ggml_tensor * tmp = up ? llm_build_lora_mm(lctx, ctx, up, cur) : cur;
     cb(tmp, "ffn_up", il);
 
@@ -9428,6 +9466,7 @@ static struct ggml_tensor * llm_build_ffn(
     } else {
         cur = tmp;
     }
+#endif
 
     switch (type_op) {
         case LLM_FFN_SILU:
@@ -10569,23 +10608,38 @@ struct llm_build_context {
             {
                 // rope freq factors for llama3; may return nullptr for llama2 and other models
                 struct ggml_tensor * rope_factors = build_rope_factors(il);
+#ifdef PIM_KERNEL
+                // don't support lora in PIM kernel
+                GGML_ASSERT(lctx.lora_adapters.size() == 0);
+                struct ggml_tensor * Qcur;
+                struct ggml_tensor * Kcur;
+                struct ggml_tensor * Vcur;
+                cur = llm_build_par_gemv_op(ctx0,
+                    model.layers[il].wq, model.layers[il].wk, model.layers[il].wv,
+                    cur, &Qcur, &Kcur, &Vcur,
+                                      3, /* parallelism */
+                                      il /* layer_idx */);
+                // add par_op into gf so that it won't gets lost
+                ggml_build_forward_expand(gf, cur);
+#else
 
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+
+                struct ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
+
+                struct ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
+#endif
                 cb(Qcur, "Qcur", il);
                 if (model.layers[il].bq) {
                     Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
                     cb(Qcur, "Qcur", il);
                 }
-
-                struct ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
                 cb(Kcur, "Kcur", il);
                 if (model.layers[il].bk) {
                     Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
                     cb(Kcur, "Kcur", il);
                 }
-
-                struct ggml_tensor * Vcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wv, cur);
                 cb(Vcur, "Vcur", il);
                 if (model.layers[il].bv) {
                     Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
