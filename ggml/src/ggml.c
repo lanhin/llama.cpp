@@ -5669,20 +5669,24 @@ struct ggml_tensor * ggml_gemv_par(
     // Fix the check as gemv
     GGML_ASSERT(ggml_can_mul_mat(w_q, cur));
     GGML_ASSERT(!ggml_is_transposed(w_q));
-    GGML_ASSERT(ggml_can_mul_mat(w_k, cur));
-    GGML_ASSERT(!ggml_is_transposed(w_k));
 
     struct ggml_tensor * par_tensor = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
 
     par_tensor->op = GGML_OP_GEMV_PAR;
     par_tensor->src[0] = cur;
     par_tensor->src[1] = w_q;
-    par_tensor->src[2] = w_k;
     par_tensor->src[4] = *none_q;
-    par_tensor->src[5] = *none_k;
+
     // set params for parallelism and layer index
     ggml_set_op_params_i32(par_tensor, 0, parallelism);
     ggml_set_op_params_i32(par_tensor, 1, layer_idx);
+
+    if (parallelism > 1) {
+        GGML_ASSERT(ggml_can_mul_mat(w_k, cur));
+        GGML_ASSERT(!ggml_is_transposed(w_k));
+        par_tensor->src[2] = w_k;
+        par_tensor->src[5] = *none_k;
+    }
 
     if (parallelism == 3) {
         GGML_ASSERT(ggml_can_mul_mat(w_v, cur));
@@ -17263,6 +17267,7 @@ static int dpu_launch_gemv_async(
 
 static int dpu_kernel_barrier() {
     // TODO: to implement
+    // dpu_sync(dpu_set);
     return 0;
 }
 

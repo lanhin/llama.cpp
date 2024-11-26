@@ -9255,6 +9255,15 @@ static void llm_build_kv_store(
     ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur, v_cache_view));
 }
 
+static struct ggml_tensor * llm_build_gemv_op(
+	   struct ggml_context * ctx,
+	   struct ggml_tensor * w,
+	   struct ggml_tensor * cur,
+	   struct ggml_tensor ** none_res,
+	   int layer_idx ) {
+    return llm_build_par_gemv_op(ctx, w, NULL, NULL, cur, none_res, NULL, NULL, 1, layer_idx);
+}
+
 static struct ggml_tensor * llm_build_par_gemv_op(
 	   struct ggml_context * ctx,
 	   struct ggml_tensor * w_q,
@@ -9266,15 +9275,17 @@ static struct ggml_tensor * llm_build_par_gemv_op(
 	   struct ggml_tensor ** none_v,
 	   int parallelism,
 	   int layer_idx ) {
-    GGML_ASSERT(parallelism == 2 || parallelism == 3);
+    GGML_ASSERT(parallelism >= 1 && parallelism <= 3);
 
     GGML_ASSERT(none_q != NULL);
-    GGML_ASSERT(none_k != NULL);
-
     *none_q = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
-    *none_k = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
     (*none_q)->op = GGML_OP_NONE;
-    (*none_k)->op = GGML_OP_NONE;
+
+    if (parallelism > 1) {
+        GGML_ASSERT(none_k != NULL);
+        *none_k = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
+        (*none_k)->op = GGML_OP_NONE;
+    }
 
     if (parallelism == 3) {
         GGML_ASSERT(none_v != NULL);
@@ -9517,7 +9528,13 @@ static struct ggml_tensor * llm_build_ffn(
     }
 
     if (down) {
+#ifdef PIM_KERNEL
+        struct ggml_tensor * gemv_res;
+        llm_build_gemv_op(ctx, down, cur, &gemv_res, il);
+        cur = gemv_res;
+#else
         cur = llm_build_lora_mm(lctx, ctx, down, cur);
+#endif
     }
 
     if (down_b) {
