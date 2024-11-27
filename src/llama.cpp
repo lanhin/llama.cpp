@@ -9255,15 +9255,6 @@ static void llm_build_kv_store(
     ggml_build_forward_expand(graph, ggml_cpy(ctx, v_cur, v_cache_view));
 }
 
-static struct ggml_tensor * llm_build_gemv_op(
-	   struct ggml_context * ctx,
-	   struct ggml_tensor * w,
-	   struct ggml_tensor * cur,
-	   struct ggml_tensor ** none_res,
-	   int layer_idx ) {
-    return llm_build_par_gemv_op(ctx, w, NULL, NULL, cur, none_res, NULL, NULL, 1, layer_idx);
-}
-
 static struct ggml_tensor * llm_build_par_gemv_op(
 	   struct ggml_context * ctx,
 	   struct ggml_tensor * w_q,
@@ -9296,6 +9287,15 @@ static struct ggml_tensor * llm_build_par_gemv_op(
     struct ggml_tensor * par_tensor = ggml_gemv_par(ctx, w_q, w_k, w_v, cur, none_q, none_k, none_v, parallelism, layer_idx);
 
     return par_tensor;
+}
+
+static struct ggml_tensor * llm_build_gemv_op(
+	   struct ggml_context * ctx,
+	   struct ggml_tensor * w,
+	   struct ggml_tensor * cur,
+	   struct ggml_tensor ** none_res,
+	   int layer_idx ) {
+    return llm_build_par_gemv_op(ctx, w, NULL, NULL, cur, none_res, NULL, NULL, 1, layer_idx);
 }
 
 // do mat_mul, while optionally apply lora
