@@ -589,7 +589,7 @@ extern "C" {
         GGML_TENSOR_FLAG_LOSS   =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
     };
 
-#define PIM_ENABLED 1
+//#define PIM_ENABLED 1
 #ifdef PIM_ENABLED
     #define MAX_PIM_DPU_NUM  128
 		enum PIM_DATA_TYPE {
@@ -617,6 +617,7 @@ extern "C" {
 		 假设：ne[0] = 4096,ne[1] = 4096,ne[2] = 1,ne[3] = 1
 		 INT8: nb[0] = sizeof(int8_t) = 1,nb[1] = 1*(4096/1) = 4096,nb[2] = nb[1]*ne[1]=4096*4096=16M,nb[3]=nb[2]*ne[2]=16M*1=16M
 		 Q4_0: nb[0] = sizeof(block_q4_0) = 18,nb[1] = 18*(4096/32) = 2304,nb[2] = nb[1]*ne[1]=4096*2304=9437184,nb[3]=nb[2]*ne[2]=9437184*1=9437184
+		 ne[0]=elements in row,ne[1] = elements in col?
 		*/
 
         int64_t ne[GGML_MAX_DIMS]; // number of elements
@@ -628,6 +629,8 @@ extern "C" {
         nb[1] = nb[0]   * (ne[0] / ggml_blck_size(type)) + padding
         //nb[2]:量化后整个矩阵的大小
         nb[2] = nb[1]   * ne[1]
+        nb[0]=block bytes,nb[1]=row bytes,nb[2]= matrix bytes
+        
 		*/
         size_t  nb[GGML_MAX_DIMS]; // stride in bytes:
                                    // nb[0] = ggml_type_size(type)
@@ -663,7 +666,7 @@ extern "C" {
         //struct llama_context *pctx;
         struct pim_context_map *ppim_context;
 
-		void *padding;
+		uint64_t  layerid;
 
         // weight是否load到DPU标志
 		enum PIM_ID pimid;

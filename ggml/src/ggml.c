@@ -12444,11 +12444,19 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 }
 
 #ifdef PIM_ENABLED
+/*
+|--Quantify-tbl--  |--DPU0-weight-Metadata--  |--layer0-subweight0--pading--  |--layer1-subweight0--pading--  |...|--layer31-subweight0--pading--  |--input-output-metadata--|--input-token--|---output0--pading--| 
+|--Quantify-tbl--  |--DPU1-weight-Metadata--  |--layer0-subweight1--pading--  |--layer1-subweight1--pading--  |...|--layer31-subweight1--pading--  |--input-output-metadata--|--input-token--|---output1--pading--|
+......
+|--Quantify-tbl--  |--DPU127-weight-Metadata--|--layer0-subweight127--pading--|--layer1-subweight127--pading--|...|--layer31-subweight127--pading--|--input-output-metadata--|--input-token--|---output127--pading--|
+*/
 int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tensor * dst)
 {
 	struct ggml_tensor *src0 = dst->src[0];
 	struct ggml_tensor *src1 = dst->src[1];
+	//WQ:type = GGML_TYPE_Q4_0
     const enum ggml_type type = src0->type;
+	// WQ:vec_dot_type = GGML_TYPE_Q8_0
 	enum ggml_type			 const vec_dot_type 		= type_traits[type].vec_dot_type;
 	ggml_from_float_t		 const from_float			= ggml_get_type_traits(vec_dot_type)->from_float;
 	ggml_from_float_to_mat_t const from_float_to_mat	= type_traits[vec_dot_type].from_float_to_mat;
@@ -12461,7 +12469,10 @@ int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tens
     GGML_TENSOR_BINARY_OP_LOCALS
     const int ith = params->ith;
     const int nth = params->nth;
-
+	
+    /*WQ:src0->type = GGML_TYPE_Q4_0
+         src1->type = GGML_TYPE_F32
+         vec_dot_type = GGML_TYPE_Q8_0*/
 	if (src1->type != vec_dot_type) {
 		char * wdata = params->wdata;
 
@@ -12472,6 +12483,7 @@ int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tens
 		assert(params->wsize >= ne13*nbw3);
 		GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
+        /*Token Quantify*/
 		for (int64_t i13 = 0; i13 < ne13; ++i13) {
 			for (int64_t i12 = 0; i12 < ne12; ++i12) {
 				int64_t i11_processed = 0;
@@ -12483,6 +12495,7 @@ int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tens
 					}
 					i11_processed = ne11 - ne11 % 4;
 				}
+				//src1:fp32->INT8
 				for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
 					from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
 						   (void *) 			  (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
@@ -12500,26 +12513,50 @@ int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tens
 		if (dst->ppim_context[dst->pimid].invalid)
 		    pimcontxt = dst->ppim_context[dst->pimid].pimcontext;
 
-		//broadcast tensor data is broadcasted to dpu
-		uint32_t i;
-		struct dpu_set_t dpu;
+		// input & output descrpit
+        uint32_t i;
+        struct dpu_set_t dpu;
+		uint32_t input_offset = pimcontxt->pim_metadata.input_offset;
+        // input & output descript 
+        pim_matrix_des input_descript;
+        //pim_matrix_des *poutdescript = &(pimcontxt->pim_metadata.outputdes);
+        input_descript.type = (int32_t)vec_dot_type;
+        input_descript.layerid = (int32_t)src0->layerid;
+        memcpy(input_descript.ne,src1->ne,sizeof(src1->ne));
+
+        // output type is fixed:GGML_TYPE_F32
+        //poutdescript->type = GGML_TYPE_F32;
+		//memcpy(poutdescript->ne,src1->ne,sizeof(src1->ne));
+		//poutdescript->ne[0] = src0->ne[0];
+
+        // input descrpit is broadcasted to dpu
+		DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
+			DPU_ASSERT(dpu_prepare_xfer(dpu, &input_descript));
+		}
+		DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , sizeof(pim_matrix_des), DPU_XFER_DEFAULT));
+        input_offset += sizeof(pim_matrix_des);
+
+		// broadcast tensor data is broadcasted to dpu
 		uint32_t bclen = ggml_row_size(vec_dot_type, ne10)*ne11*ne12*ne13;
 		DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
 			DPU_ASSERT(dpu_prepare_xfer(dpu, wdata));
 		}
-		DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pimcontxt->pim_metadata.input_offset , bclen, DPU_XFER_DEFAULT));
-
+		DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , bclen, DPU_XFER_DEFAULT));
+        input_offset += bclen;
 		// 启动DPU，load数据
 		DPU_ASSERT(dpu_launch(pimcontxt->dpu_set, DPU_SYNCHRONOUS));
 		//打印dpu log
 		DPU_FOREACH(pimcontxt->dpu_set, dpu) {
 			DPU_ASSERT(dpulog_read_for_dpu(dpu.dpu, stdout));			
 		}
+
+		//todo:read response from dpu
 	}
 	return 0;
 
 }
 #endif
+
 
 static void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
@@ -12538,7 +12575,11 @@ static void ggml_compute_forward_mul_mat(
         const int nth = params->nth;
 
         const enum ggml_type type = src0->type;
-
+        /*src0->type = GGML_TYPE_Q4_0
+          src0->vec_dot_type = GGML_TYPE_Q8_0
+          src1->type = GGML_TYPE_F32
+          src0->vec_dot_type = GGML_TYPE_F32
+        */
         enum ggml_type           const vec_dot_type         = type_traits[type].vec_dot_type;
         ggml_from_float_t        const from_float           = type_traits[vec_dot_type].from_float;
         ggml_from_float_to_mat_t const from_float_to_mat    = type_traits[vec_dot_type].from_float_to_mat;
@@ -12574,8 +12615,10 @@ static void ggml_compute_forward_mul_mat(
         const bool src1_cont = ggml_is_contiguous(src1);
 
         if (src1_cont) {
+			//WQ: ne12=ne13=1
             for (int64_t i13 = 0; i13 < ne13; i13++)
                 for (int64_t i12 = 0; i12 < ne12; i12++)
+					//ne00 = 4096,ne01=4096,ne11=2,ggml_blck_size(src0->type)=32,return false(sr1->type != GGML_TYPE_Q8_0)
                     if (!llamafile_sgemm(ne01, ne11, ne00/ggml_blck_size(src0->type),
                                         (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03,
                                         nb01/ggml_type_size(src0->type),
@@ -12592,10 +12635,15 @@ static void ggml_compute_forward_mul_mat(
         }
     UseGgmlGemm1:;
     #endif
-
+      
         if (src1->type != vec_dot_type) {
             char * wdata = params->wdata;
 
+            /*WQ:vec_dot_type = GGML_TYPE_Q8_0,ne10 = 4096
+              nbw1 = 34*4096/32 = 4352, GGML_TYPE_Q8_0 row size
+              nbw2 = 4352 * 2 = 8704,GGML_TYPE_Q8_0 matrix size
+              nbw3 = 8704
+              */
             const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
             const size_t nbw2 = nbw1*ne11;
             const size_t nbw3 = nbw2*ne12;
@@ -12608,6 +12656,7 @@ static void ggml_compute_forward_mul_mat(
                     int64_t i11_processed = 0;
                     if ((ggml_n_dims(src1) == 2) && from_float_to_mat && gemm) {
                         for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
+							//WQ: sr1 per row,GGML_TYPE_F32 -> GGML_TYPE_Q8_0
                             from_float_to_mat((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
                                             (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
                                             4, ne10, blck_size_interleave);
@@ -12615,6 +12664,7 @@ static void ggml_compute_forward_mul_mat(
                         i11_processed = ne11 - ne11 % 4;
                     }
                     for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
+						//WQ: sr1 per row,GGML_TYPE_F32 -> GGML_TYPE_Q8_0
                         from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
                             (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
                             ne10);
@@ -12637,6 +12687,20 @@ static void ggml_compute_forward_mul_mat(
 
             for (int64_t i13 = 0; i13 < ne13; i13++)
                 for (int64_t i12 = 0; i12 < ne12; i12++)
+					/*WQ:
+					ne12=ne13=1
+					src0:transposed,row=ne01=4096,col=ne00/bloksize = 128
+					src1:never transposed, row=ne00/bloksize = 128,col = 2 
+					A Matrix:src0->data
+					lda=nb01/typesize=2304/18=128(rowsie/blocksize)
+					B Matrix:src1->data
+					ldb=2304/18=128
+					C Matrix:dst->data
+					ldc=4096?
+					src0->type = GGML_TYPE_Q4_0
+					dst->type=GGML_TYPE_F32
+					ith = 0,nth=1
+				    */
                     if (!llamafile_sgemm(ne01, ne11, ne00/ggml_blck_size(src0->type),
                                         (const char *)src0->data + i12/r2*nb02 + i13/r3*nb03,
                                         nb01/ggml_type_size(src0->type),

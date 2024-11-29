@@ -566,7 +566,7 @@ ifdef PIM_ENABLED
 endif # PIM_ENABLED
 
 ifdef GGML_OPENBLAS
-	MK_CPPFLAGS += -DGGML_USE_BLAS -DPIM_ENABLED $(shell pkg-config --cflags-only-I openblas) -I/usr/local/OpenBLAS/include 
+	MK_CPPFLAGS += -DGGML_USE_BLAS  $(shell pkg-config --cflags-only-I openblas) -I/usr/local/OpenBLAS/include 
 	MK_CFLAGS   += $(shell pkg-config --cflags-only-other openblas)
 	MK_LDFLAGS  += $(shell pkg-config --libs openblas) -lopenblas -L/usr/local/OpenBLAS/lib/ 
 	OBJ_GGML    += ggml/src/ggml-blas.o

@@ -81,6 +81,7 @@
 #include <type_traits>
 #include <unordered_map>
 
+#ifdef PIM_ENABLED
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -88,6 +89,7 @@ extern "C" {
 #include <dpu_log.h>
 #ifdef __cplusplus
 }
+#endif
 #endif
 
 #if defined(_MSC_VER)
@@ -9325,16 +9327,20 @@ typedef struct {
 // do pim mat_mul
 /*
 Weight in DPU MRAM:
-|--DPU0-Metadata--  |--layer0-subweight0--pading--  |--layer1-subweight0--pading--  |...|--layer31-subweight0--pading--  |---response(婢舵艾鐪版径宥囨暏)--pading--|--input-metadata--|--input-token--| 
-|--DPU1-Metadata--  |--layer0-subweight1--pading--  |--layer1-subweight1--pading--  |...|--layer31-subweight1--pading--  |---response(婢舵艾鐪版径宥囨暏)--pading--|--input-metadata--|--input-token--|
+|--Quantify-tbl--  |--DPU0-Metadata--  |--layer0-subweight0--pading--  |--layer1-subweight0--pading--  |...|--layer31-subweight0--pading--  |--input-metadata--|--input-token--|---response0--pading--| 
+|--Quantify-tbl--  |--DPU1-Metadata--  |--layer0-subweight1--pading--  |--layer1-subweight1--pading--  |...|--layer31-subweight1--pading--  |--input-metadata--|--input-token--|---response1--pading--|
 ......
-|--DPU127-Metadata--|--layer0-subweight127--pading--|--layer1-subweight127--pading--|...|--layer31-subweight127--pading--|---response(婢舵艾鐪版径宥囨暏)--pading--|--input-metadata--|--input-token--|
+|--Quantify-tbl--  |--DPU127-Metadata--|--layer0-subweight127--pading--|--layer1-subweight127--pading--|...|--layer31-subweight127--pading--|--input-metadata--|--input-token--|---response127--pading--|
 
 */
+extern float ggml_table_f32_f16[1 << 16];
 int llama_load2dpu(struct llama_context *pctx,llama_model * model) {
     #define NR_DPUS 128
-    #define DPU_BINARY "/home/yuanqi/llama.cpp/dpu/gemv_dpu"
+    #define DPU_BINARY "/home/liji/llama.cpp/dpu/gemv_dpu"
     uint32_t nr_of_dpus;
+    uint32_t pim_offset = 0;
+    int i;
+    struct dpu_set_t dpu;
 	// Allocate DPUs and load binary
 	//memset(&ctx->q_pim_context,0,sizeof(struct pim_context));
 	//DPU_ASSERT(dpu_alloc(NR_DPUS, NULL, &ctx->q_pim_context.dpu_set));
@@ -9345,7 +9351,15 @@ int llama_load2dpu(struct llama_context *pctx,llama_model * model) {
 	memset(pqcontext,0,sizeof(struct pim_context));
 	DPU_ASSERT(dpu_alloc(NR_DPUS, NULL, &pqcontext->dpu_set));
 	
-	//DPU_ASSERT(dpu_load(pqcontext->dpu_set, DPU_BINARY, NULL));
+	DPU_ASSERT(dpu_load(pqcontext->dpu_set, DPU_BINARY, NULL));
+
+    //ggml_table_f32_f16 tbl is transferred to pim
+	DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
+        // transfer to dpu
+        DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, (void *)(ggml_table_f32_f16)));
+    }
+    DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, sizeof(ggml_table_f32_f16), DPU_XFER_DEFAULT));
+    pim_offset += sizeof(ggml_table_f32_f16);
 	// WQID = 1
     //pctx->pim_tensor_context.insert(std::pair<enum PIM_ID ,struct pim_context *>(PIM_WQ,pqcontext));
     pctx->pim_context_array[PIM_WQ].invalid = 1;
@@ -9353,45 +9367,52 @@ int llama_load2dpu(struct llama_context *pctx,llama_model * model) {
 	pctx->pim_context_array[PIM_WQ].pimcontext = pqcontext;
 
     // WQ metadata is loaded to dpu WRAM, make WQ's param in every layer is same
-	struct dpu_set_t dpu;
+	
 	uint32_t n_layer = model->layers.size();
-	uint32_t il = 0,i,metadataoffset = 0;
-	//dpu_get_nr_dpus(pqcontext->dpu_set, &nr_of_dpus);
+	uint32_t il = 0;
+	dpu_get_nr_dpus(pqcontext->dpu_set, &nr_of_dpus);
 	pqcontext->pim_metadata.layer_num = n_layer;
 	pqcontext->pim_metadata.weight_type = (uint16_t)(model->layers[il].wq->type);
-	memcpy(pqcontext->pim_metadata.ne,model->layers[il].wq->ne,sizeof(pqcontext->pim_metadata.ne));
-	pqcontext->pim_metadata.ne[1] = model->layers[il].wq->ne[1] / nr_of_dpus;
+	//memcpy(pqcontext->pim_metadata.ne,model->layers[il].wq->ne,sizeof(pqcontext->pim_metadata.ne));
+	//pqcontext->pim_metadata.ne[1] = model->layers[il].wq->ne[1] / nr_of_dpus;
 
-	memcpy(pqcontext->pim_metadata.nb,model->layers[il].wq->nb,sizeof(pqcontext->pim_metadata.nb));
-    pqcontext->pim_metadata.nb[0] = model->layers[il].wq->nb[0];
+	//memcpy(pqcontext->pim_metadata.nb,model->layers[il].wq->nb,sizeof(pqcontext->pim_metadata.nb));
+    //pqcontext->pim_metadata.nb[0] = model->layers[il].wq->nb[0];
     // maybe has problem?
-	pqcontext->pim_metadata.nb[1] = model->layers[il].wq->nb[0] * (pqcontext->pim_metadata.ne[0] / ggml_blck_size(model->layers[il].wq->type));
-	pqcontext->pim_metadata.nb[2] = model->layers[il].wq->nb[1] * pqcontext->pim_metadata.ne[1];
+	//pqcontext->pim_metadata.nb[1] = model->layers[il].wq->nb[0] * (pqcontext->pim_metadata.ne[0] / ggml_blck_size(model->layers[il].wq->type));
+	//pqcontext->pim_metadata.nb[2] = model->layers[il].wq->nb[1] * pqcontext->pim_metadata.ne[1];
 	
 	pqcontext->pim_metadata.size_per_row = model->layers[il].wq->nb[1];
-	pqcontext->pim_metadata.rows_per_dpu = model->layers[il].wq->ne[1] / nr_of_dpus;
-	pqcontext->pim_metadata.rest_rows = model->layers[il].wq->ne[1] % nr_of_dpus;
+	pqcontext->pim_metadata.rows_per_dpu = model->layers[il].wq->ne[0] / nr_of_dpus;
+	pqcontext->pim_metadata.rest_rows = model->layers[il].wq->ne[0] % nr_of_dpus;
 	pqcontext->pim_metadata.layer_len = pqcontext->pim_metadata.size_per_row * (pqcontext->pim_metadata.rows_per_dpu + 1);
+    pqcontext->pim_metadata.weight_des.type = (int64_t)(model->layers[il].wq->type);
+    memcpy(pqcontext->pim_metadata.weight_des.ne,model->layers[il].wq->ne,sizeof(model->layers[il].wq->ne));
+    pqcontext->pim_metadata.weight_des.ne[0] = pqcontext->pim_metadata.weight_des.ne[0] / nr_of_dpus;
+#if 0
 	pqcontext->pim_metadata.response_offset = pqcontext->pim_metadata.layer_len * n_layer;
     //8 Bytes align
-	if (pqcontext->pim_metadata.response_offset & 0x3) {
-        pqcontext->pim_metadata.response_offset = pqcontext->pim_metadata.response_offset & 0xFFFFFFF8 + 0x8;
+	if (pqcontext->pim_metadata.response_offset & 0x7) {
+        pqcontext->pim_metadata.response_offset = (pqcontext->pim_metadata.response_offset & 0xFFFFFFF8) + 0x8;
 	}
 	// 8 Bytes align
 	pqcontext->pim_metadata.response_len = (pqcontext->pim_metadata.rows_per_dpu + 1) * sizeof(uint32_t);
-	if (pqcontext->pim_metadata.response_len & 0x3) {
-        pqcontext->pim_metadata.response_len = pqcontext->pim_metadata.response_len & 0xFFFFFFF8 + 0x8;
+	if (pqcontext->pim_metadata.response_len & 0x7) {
+        pqcontext->pim_metadata.response_len = (pqcontext->pim_metadata.response_len & 0xFFFFFFF8) + 0x8;
 	}
 	
 	pqcontext->pim_metadata.input_offset = pqcontext->pim_metadata.response_offset + pqcontext->pim_metadata.response_len;
-#if 0
+#else
+    //input len,response offset & len is decided later
+    pqcontext->pim_metadata.input_offset = pqcontext->pim_metadata.layer_len * n_layer;
+#endif
 	DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
 		// transfer to dpu
 		DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, (void *)(&pqcontext->pim_metadata)));
 	}
-	DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, 0, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
+	DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
 	//DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, "DPU_INPUT_ARGUMENTS", 0, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
-    metadataoffset = sizeof(struct pim_meta);
+    pim_offset += sizeof(struct pim_meta);
     // load WQ weight data to dpu MRAM
     // row is  transposed
     uint32_t layerid;
@@ -9423,7 +9444,7 @@ int llama_load2dpu(struct llama_context *pctx,llama_model * model) {
 	        DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, ((unsigned char *)w->data) + prev_rows_dpu*size_per_row));
 	    }
 
-		DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, metadataoffset + layeroffset*layerid, rows_per_dpu * size_per_row, DPU_XFER_DEFAULT));
+		DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset + layeroffset*layerid, rows_per_dpu * size_per_row, DPU_XFER_DEFAULT));
 
 		//rest data is send to dpu
 		if (rest_rows > 0) {
@@ -9440,12 +9461,12 @@ int llama_load2dpu(struct llama_context *pctx,llama_model * model) {
 	            DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, w->data + prev_rows_dpu*size_per_row));
 	        }
 	     
-			DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, metadataoffset + layeroffset*layerid + size_per_row*rows_per_dpu, size_per_row, DPU_XFER_DEFAULT));
+			DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset + layeroffset*layerid + size_per_row*rows_per_dpu, size_per_row, DPU_XFER_DEFAULT));
 		}
 	  
 		//printf("load weight W:%p\n",w);   		
     }   
-    #endif  
+ 
 	return 0;
 }
 #endif
@@ -10714,6 +10735,7 @@ struct llm_build_context {
                 #ifdef PIM_ENABLED
 				    Qcur->ppim_context = lctx.pim_context_array;
 				    Qcur->pimid = PIM_WQ;
+                    model.layers[il].wq->layerid = il;
 				#endif                
                 cb(Qcur, "Qcur", il);
                 if (model.layers[il].bq) {

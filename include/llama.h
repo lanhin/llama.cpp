@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+#ifdef PIM_ENABLED
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -16,6 +17,7 @@ extern "C" {
 #include <dpu_log.h>
 #ifdef __cplusplus
 }
+#endif
 #endif
 
 #ifdef LLAMA_SHARED
@@ -57,21 +59,15 @@ extern "C" {
 
 #ifdef PIM_ENABLED
 #define LAYERNUM 32
+
+	typedef struct	{
+		int32_t type;
+        int32_t layerid;
+		int64_t ne[GGML_MAX_DIMS];
+	}pim_matrix_des; // 8 Byte align
+
 	
 	struct pim_meta {
-	/*
-		// 每个类型的tensor在DPU中的metadata
-		uint16_t layer_num;
-		uint16_t weight_type;
-		uint32_t size_per_row;
-		//uint32_t rownum_per_layer[LAYERNUM];
-		uint32_t rest_row;
-		uint32_t layer_offset;
-		//uint32_t layer_offset[LAYERNUM];
-		// 每一层串行计算，dpu的返回值只需一个地址空间
-		uint32_t response_offset;
-		uint32_t response_len;
-		*/
 		// 每个类型的tensor在DPU中的metadata
 		uint16_t layer_num;
 		uint16_t weight_type;
@@ -79,14 +75,18 @@ extern "C" {
 		uint16_t rest_rows;
 		uint32_t size_per_row;
 		uint32_t layer_len;
-		// 每一层串行计算，dpu的返回值只需一个地址空间
-		uint32_t response_offset;
-		uint32_t response_len;
-		// 每一层串行计算，dpu的输入也只需要一个地址空间
-		uint32_t input_offset;
-		uint32_t input_len; 
-		int64_t ne[GGML_MAX_DIMS];
-		size_t	nb[GGML_MAX_DIMS];
+	    // 每一层串行计算，dpu的输入也只需要一个地址空间
+	    uint32_t input_offset;
+	    uint32_t input_len;
+	    // 每一层串行计算，dpu的返回值只需一个地址空间
+	    uint32_t response_offset;
+        uint32_t response_len;
+
+        pim_matrix_des weight_des;
+		//pim_inout_des inputdes;
+		//pim_inout_des outputdes;
+		//int64_t ne[GGML_MAX_DIMS];
+		//size_t	nb[GGML_MAX_DIMS];
 	};
 	
 	struct pim_context {
