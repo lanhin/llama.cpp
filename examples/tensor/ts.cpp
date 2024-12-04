@@ -1,6 +1,6 @@
 #include "trace_driver.h"
 #include <iostream>
-
+#include <iomanip>
 
 void fp_table_init(void) {
   for (int i = 0; i < (1 << 16); ++i) {
@@ -32,8 +32,10 @@ int main(int argc, char** argv) {
   std::cout<<"ts_c:"<<std::endl;
   dump_tensor(ts_c, stdout);
 
-  dump_tensor_first_n(ts_a, 4096, stdout);
-  dump_tensor_first_n(ts_bq, 4096, stdout);
+  //dump_tensor_first_n(ts_a, 4096, stdout);
+  //dump_tensor_first_n(ts_bq, 4096, stdout);
 
+  float first_res = mul_add_q4_0_q8_0(ts_a, ts_bq);
+  std::cout<<"first element: "<<std::fixed << std::setprecision(6)<<first_res<<std::endl;
   return 0;
 }

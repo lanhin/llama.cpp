@@ -228,3 +228,29 @@ void dump_tensor(const struct ggml_tensor * tensor, FILE * fout) {
     }
     fprintf(fout, "\n");
 }
+
+float mul_add_q4_0_q8_0(struct ggml_tensor * a, struct ggml_tensor *b) {
+  GGML_ASSERT(a->type == GGML_TYPE_Q4_0);
+  GGML_ASSERT(b->type == GGML_TYPE_Q8_0);
+  const block_q4_0 *x = a->data;
+  const block_q8_0 *y = b->data;
+
+  int nb = 4096/32;
+  float res = 0.0;
+  for (int ib = 0; ib < nb; ++ib) {
+    int sumi0 = 0;
+    int sumi1 = 0;
+
+    for (int j = 0; j < QK4_0/2; ++j) {
+      const int v0 = (x[ib].qs[j] & 0x0F) - 8;
+      const int v1 = (x[ib].qs[j] >>   4) - 8;
+
+      sumi0 += (v0 * y[ib].qs[j]);
+      sumi1 += (v1 * y[ib].qs[j + QK4_0/2]);
+    }
+
+    int sumi = sumi0 + sumi1;
+    res += sumi*GGML_FP16_TO_FP32(x[ib].d)*GGML_FP16_TO_FP32(y[ib].d);
+  }
+  return res;
+}
