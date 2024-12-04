@@ -7,6 +7,7 @@
 #include "ggml-quants.h"
 #include "ggml.h"
 #include "ggml-aarch64.h"
+#include "trace_driver.h"
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -12486,6 +12487,12 @@ static void ggml_compute_forward_mul_mat(
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
+    static bool to_export = false;
+    static bool exported = false;
+    const char* filenamea = "a.tensor";
+    const char* filenameb = "b.tensor";
+    const char* filenamebq = "b_quant.tensor";
+    const char* filenamec = "c.tensor";
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -12520,6 +12527,20 @@ static void ggml_compute_forward_mul_mat(
 
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
+
+    // export the first gemv's tensor
+    if (type == GGML_TYPE_Q4_0 && src1->type == GGML_TYPE_F32 &&
+        ne00 == 4096 && ne01 == 4096 &&
+        ne02 == 1 && ne03 == 1 &&
+        ne10 == 4096 && ne11 == 1 &&
+        ne12 == 1 && ne13 == 1) {
+      to_export = true;
+    }
+    if (to_export && !exported) {
+      tensor_export(src0, filenamea);
+      tensor_export(src1, filenameb);
+    }
+
 
 #if GGML_USE_LLAMAFILE
     // broadcast factors
@@ -12576,6 +12597,25 @@ UseGgmlGemm1:;
                 }
             }
         }
+
+        if (to_export && !exported) {
+          struct ggml_tensor * quant_src1 = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
+          GGML_ASSERT(quant_src1 != NULL);
+          quant_src1->type = vec_dot_type;
+          quant_src1->op = src1->op;
+          quant_src1->flags = src1->flags;
+          quant_src1->ne[0] = src1->ne[0];
+          quant_src1->ne[1] = src1->ne[1];
+          quant_src1->ne[2] = src1->ne[2];
+          quant_src1->ne[3] = src1->ne[3];
+          quant_src1->nb[0] = ggml_type_size(vec_dot_type);
+          quant_src1->nb[1] = nbw1;
+          quant_src1->nb[2] = nbw2;
+          quant_src1->nb[3] = nbw3;
+          quant_src1->data = wdata;
+          tensor_export(quant_src1, filenamebq);
+        }
+
     }
 
     if (ith == 0) {
@@ -12692,6 +12732,10 @@ UseGgmlGemm2:;
         }
 
         current_chunk = atomic_fetch_add_explicit(&params->threadpool->current_chunk, 1, memory_order_relaxed);
+    }
+    if (to_export && !exported) {
+      tensor_export(dst, filenamec);
+      exported = true;
     }
 }
 

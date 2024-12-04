@@ -922,6 +922,7 @@ OBJ_GGML += \
 
 OBJ_LLAMA = \
 	src/llama.o \
+	src/trace_driver.o \
 	src/llama-vocab.o \
 	src/llama-grammar.o \
 	src/llama-sampling.o \
@@ -1129,6 +1130,11 @@ src/llama.o: \
 	ggml/include/ggml-backend.h
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+src/trace_driver.o: \
+	src/trace_driver.c \
+	include/trace_driver.h
+	$(CC)  $(CFLAGS) -c $< -o $@
+
 src/llama-vocab.o: \
 	src/llama-vocab.cpp \
 	src/llama-vocab.h \
@@ -1324,7 +1330,7 @@ llama-save-load-state: examples/save-load-state/save-load-state.cpp \
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
 llama-gguf: examples/gguf/gguf.cpp \
-	$(OBJ_GGML)
+	$(OBJ_GGML) src/trace_driver.o
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
@@ -1630,12 +1636,12 @@ tests/test-chat-template: tests/test-chat-template.cpp \
 #
 
 llama-vdot: pocs/vdot/vdot.cpp ggml/src/ggml.o \
-	$(OBJ_GGML)
+	$(OBJ_GGML) src/trace_driver.o
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
 llama-q8dot: pocs/vdot/q8dot.cpp ggml/src/ggml.o \
-	$(OBJ_GGML)
+	$(OBJ_GGML) src/trace_driver.o
 	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
 	$(CXX) $(CXXFLAGS) $(filter-out $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
