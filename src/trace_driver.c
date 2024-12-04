@@ -25,6 +25,8 @@ void tensor_export(const struct ggml_tensor * tensor, const char * fname) {
         fwrite(&nb, sizeof(uint64_t), 1, fout);
     }
 
+    fwrite(tensor->name,      sizeof(char), GGML_MAX_NAME,      fout);
+
     // dump the data
     // TODO: pad this to 32 byte boundary
     {
@@ -36,7 +38,7 @@ void tensor_export(const struct ggml_tensor * tensor, const char * fname) {
     fclose(fout);
 }
 
-struct ggml_tensor * tensor_import(struct ggml_context *ctx, const char * fname) {
+struct ggml_tensor * tensor_import(const char * fname) {
   char * data = NULL;
   FILE * fin = ggml_fopen(fname, "rb");
   if (!fin) {
@@ -84,18 +86,85 @@ struct ggml_tensor * tensor_import(struct ggml_context *ctx, const char * fname)
     nb[j] = nb_cur;
   }
 
-  struct ggml_tensor * tensor = ggml_new_tensor(ctx, (enum ggml_type) type, GGML_MAX_DIMS, ne);
+  struct ggml_tensor * tensor = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
 
+  tensor->type = type;
   tensor->op    = (enum ggml_op) op;
   tensor->flags = flags;
 
   for (int j = 0; j < GGML_MAX_DIMS; ++j) {
+    tensor->ne[j] = ne[j];
     tensor->nb[j] = nb[j];
   }
+
+  memcpy(tensor->name, ptr, GGML_MAX_NAME);
+  ptr += GGML_MAX_NAME;
 
   tensor->data = (void *) ptr; ptr += ggml_nbytes(tensor);
 
   return tensor;
+}
+
+void dump_tensor_first_n(const struct ggml_tensor * tensor, int n, FILE * fout) {
+    const int64_t * ne = tensor->ne;
+    const size_t  * nb = tensor->nb;
+    fprintf(fout, "%-6s %-12s %8d %ld %ld %ld %ld %16zu %16zu %16zu %16zu %16p %32s\n",
+            ggml_type_name(tensor->type),
+            ggml_op_name  (tensor->op),
+            ggml_n_dims(tensor),
+            ne[0], ne[1], ne[2], ne[3],
+            nb[0], nb[1], nb[2], nb[3],
+            tensor->data,
+            tensor->name);
+
+    int elements_to_dump = n;
+    if (elements_to_dump > ggml_nelements(tensor)) {
+      elements_to_dump = ggml_nelements(tensor);
+    }
+    int blck_size = ggml_blck_size(tensor->type);
+    int blcks_to_dump = elements_to_dump = (elements_to_dump + blck_size - 1)/ blck_size;
+
+    for (int i=0; i < blcks_to_dump; i++) {
+      switch(tensor->type){
+      case GGML_TYPE_F32:
+      case GGML_TYPE_F16:
+      case GGML_TYPE_BF16:
+        {
+          fprintf(fout, "[%d] = %f    ", i, (double)ggml_get_f32_1d(tensor, i));
+          if (i % 4 == 3) {
+            fprintf(fout, "\n");
+          }
+        }
+        break;
+      case GGML_TYPE_Q4_0:
+        {
+          const block_q4_0 * x = tensor->data;
+          fprintf(fout, "i = %d, delta = %f, qs: ", i, GGML_FP16_TO_FP32(x[i].d));
+          for (int j=0; j < QK4_0/2; j++) {
+            const int v0 = (x[i].qs[j] & 0x0f) - 8;
+            const int v1 = (x[i].qs[j]  >> 4) - 8;
+            fprintf(fout, "%d, %d, ", v0, v1);
+          }
+          fprintf(fout, "\n");
+        }
+        break;
+      case GGML_TYPE_Q8_0:
+        {
+          const block_q8_0 * x = tensor->data;
+          fprintf(fout, "i = %d, delta = %f, qs:", i, GGML_FP16_TO_FP32(x[i].d));
+          for (int j=0; j < QK8_0; j++) {
+            const int v0 = (x[i].qs[j]);
+            fprintf(fout, "%d,", v0);
+          }
+          fprintf(fout, "\n");
+        }
+        break;
+      default:
+        {
+          fprintf(fout, "Unsupported tensor type: %d\n", tensor->type);
+        }
+      }
+    }
 }
 
 void dump_tensor(const struct ggml_tensor * tensor, FILE * fout) {
@@ -111,15 +180,19 @@ void dump_tensor(const struct ggml_tensor * tensor, FILE * fout) {
             tensor->name);
 
     int ele_stride = 128;
+    ele_stride = ele_stride / ggml_blck_size(tensor->type);
+    if (ele_stride < ggml_nelements(tensor) / ggml_blck_size(tensor->type) / 64) {
+      ele_stride = ggml_nelements(tensor) / ggml_blck_size(tensor->type) / 64;
+    }
     fprintf(fout, "Element with stride %d:\n", ele_stride);
-    for (int i=0; i < ggml_nelements(tensor); i += ele_stride) {
+    for (int i=0; i < ggml_nelements(tensor) / ggml_blck_size(tensor->type); i += ele_stride) {
       switch(tensor->type){
       case GGML_TYPE_F32:
       case GGML_TYPE_F16:
       case GGML_TYPE_BF16:
         {
-          fprintf(fout, "%.2e", (double)ggml_get_f32_1d(tensor, i));
-          if ((i / ele_stride) % 4 == 0) {
+          fprintf(fout, "[%d] = %f    ", i, (double)ggml_get_f32_1d(tensor, i));
+          if ((i / ele_stride) % 4 == 3) {
             fprintf(fout, "\n");
           }
         }
@@ -127,24 +200,21 @@ void dump_tensor(const struct ggml_tensor * tensor, FILE * fout) {
       case GGML_TYPE_Q4_0:
         {
           const block_q4_0 * x = tensor->data;
-          //          block_q4_0
-          int idx = i / ggml_blck_size(tensor->type);
-          fprintf(fout, "delta = %f, qs:", GGML_FP16_TO_FP32(x[idx].d));
+          fprintf(fout, "i = %d, delta = %f, qs: ", i, GGML_FP16_TO_FP32(x[i].d));
           for (int j=0; j < QK4_0/2; j++) {
-            const int v0 = (x[idx].qs[j] & 0x0f)  - 8;
-            const int v1 = (x[idx].qs[j]  >> 4)  - 8;
-            fprintf(fout, "%d, %d,", v0, v1);
+            const int v0 = (x[i].qs[j] & 0x0f) - 8;
+            const int v1 = (x[i].qs[j]  >> 4) - 8;
+            fprintf(fout, "%d, %d, ", v0, v1);
           }
           fprintf(fout, "\n");
         }
         break;
       case GGML_TYPE_Q8_0:
         {
-        const block_q8_0 * x = tensor->data;
-          int idx = i / ggml_blck_size(tensor->type);
-          fprintf(fout, "delta = %f, qs:", GGML_FP16_TO_FP32(x[idx].d));
+          const block_q8_0 * x = tensor->data;
+          fprintf(fout, "i = %d, delta = %f, qs:", i, GGML_FP16_TO_FP32(x[i].d));
           for (int j=0; j < QK8_0; j++) {
-            const int v0 = (x[idx].qs[j]);
+            const int v0 = (x[i].qs[j]);
             fprintf(fout, "%d,", v0);
           }
           fprintf(fout, "\n");
@@ -156,4 +226,5 @@ void dump_tensor(const struct ggml_tensor * tensor, FILE * fout) {
         }
       }
     }
+    fprintf(fout, "\n");
 }

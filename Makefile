@@ -36,6 +36,7 @@ BUILD_TARGETS = \
 	llama-simple \
 	llama-speculative \
 	llama-tokenize \
+	llama-ts \
 	llama-vdot \
 	llama-cvector-generator \
 	llama-gen-docs \
@@ -1268,6 +1269,11 @@ llama-cli: examples/main/main.cpp \
 	@echo
 	@echo '====  Run ./llama-cli -h for help.  ===='
 	@echo
+
+llama-ts: examples/tensor/ts.cpp \
+	$(OBJ_ALL)
+	$(CXX) $(CXXFLAGS) -c $< -o $(call GET_OBJ_FILE, $<)
+	$(CXX) $(CXXFLAGS) $(filter-out %.h $<,$^) $(call GET_OBJ_FILE, $<) -o $@ $(LDFLAGS)
 
 llama-infill: examples/infill/infill.cpp \
 	$(OBJ_ALL)

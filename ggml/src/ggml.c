@@ -12600,10 +12600,12 @@ UseGgmlGemm1:;
 
         if (to_export && !exported) {
           struct ggml_tensor * quant_src1 = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
+          const char* quant_name = "token_quantified";
           GGML_ASSERT(quant_src1 != NULL);
           quant_src1->type = vec_dot_type;
           quant_src1->op = src1->op;
           quant_src1->flags = src1->flags;
+          memcpy(quant_src1->name, quant_name, GGML_MAX_NAME);
           quant_src1->ne[0] = src1->ne[0];
           quant_src1->ne[1] = src1->ne[1];
           quant_src1->ne[2] = src1->ne[2];
@@ -12615,7 +12617,6 @@ UseGgmlGemm1:;
           quant_src1->data = wdata;
           tensor_export(quant_src1, filenamebq);
         }
-
     }
 
     if (ith == 0) {
