@@ -12522,7 +12522,12 @@ int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tens
         //pim_matrix_des *poutdescript = &(pimcontxt->pim_metadata.outputdes);
         input_descript.type = (int32_t)vec_dot_type;
         input_descript.layerid = (int32_t)src0->layerid;
+        for(int jj=0;jj<GGML_MAX_DIMS;jj++) {
+            printf("ne[%d]=%d\n",jj,src1->ne[jj]);
+        }
         memcpy(input_descript.ne,src1->ne,sizeof(src1->ne));
+
+		printf("sizeof(src1->ne)=%d\n",sizeof(src1->ne));
 
         // output type is fixed:GGML_TYPE_F32
         //poutdescript->type = GGML_TYPE_F32;
@@ -12551,6 +12556,18 @@ int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tens
 		}
 
 		//todo:read response from dpu
+		float *mul_max_res = (float *)malloc(src0->ne[1] * src1->ne[1] * sizeof(float));
+
+		DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
+			DPU_ASSERT(dpu_prepare_xfer(dpu, mul_max_res + i * pimcontxt->pim_metadata.rows_per_dpu*src1->ne[1]*sizeof(float)));
+		}
+		DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_FROM_DPU, DPU_MRAM_HEAP_POINTER_NAME,input_offset, pimcontxt->pim_metadata.rows_per_dpu*src1->ne[1]*sizeof(float), DPU_XFER_DEFAULT));
+
+        for(int kk=0;kk<10;kk++) {
+            for (int mm=0;mm<dst->ne[1];mm++)
+                printf("%d ",mul_max_res[kk*dst->ne[1]+mm]);
+				printf("\n");
+			}
 	}
 	return 0;
 
@@ -12687,7 +12704,7 @@ static void ggml_compute_forward_mul_mat(
 
             for (int64_t i13 = 0; i13 < ne13; i13++)
                 for (int64_t i12 = 0; i12 < ne12; i12++)
-					/*WQ:
+					/*WQ: 
 					ne12=ne13=1
 					src0:transposed,row=ne01=4096,col=ne00/bloksize = 128
 					src1:never transposed, row=ne00/bloksize = 128,col = 2 
@@ -12713,6 +12730,20 @@ static void ggml_compute_forward_mul_mat(
                                         vec_dot_type,
                                         dst->type))
                         goto UseGgmlGemm2;
+#if 0
+            printf("type=%d\n",dst->type);
+            for(int ii=0;ii<GGML_MAX_DIMS;ii++) {
+                printf("dst ne[%d]=%d\n",ii,dst->ne[ii]);
+            }
+
+			uint32_t *pres = (uint32_t *)dst->data;
+
+			for(int kk=0;kk<dst->ne[0];kk++) {
+                for (int mm=0;mm<dst->ne[1];mm++)
+					printf("%d ",pres[kk*dst->ne[1]+mm]);
+				printf("\n");
+			}
+#endif
             return;
         }
     UseGgmlGemm2:;
