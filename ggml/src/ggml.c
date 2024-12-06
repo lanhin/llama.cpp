@@ -53,6 +53,7 @@
 #include <dpu.h>
 #include <dpu_log.h>
 #endif
+#include <trace_driver.h>
 
 #if defined(_MSC_VER)
 // disable "possible loss of data" to avoid hundreds of casts
@@ -12513,6 +12514,14 @@ int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tens
 		if (dst->ppim_context[dst->pimid].invalid)
 		    pimcontxt = dst->ppim_context[dst->pimid].pimcontext;
 
+		block_q8_0 *pinputblock = (block_q8_0 *)wdata;
+		printf("d=%u\n",pinputblock[0].d);
+         for (int kkk=0;kkk<QK8_0;kkk++) {
+		 	 
+		     printf("%d ",pinputblock[0].qs[kkk]);
+         }
+		 printf("\n");
+
 		// input & output descrpit
         uint32_t i;
         struct dpu_set_t dpu;
@@ -12556,18 +12565,30 @@ int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tens
 		}
 
 		//todo:read response from dpu
-		float *mul_max_res = (float *)malloc(src0->ne[1] * src1->ne[1] * sizeof(float));
+		//float *mul_max_res = (float *)malloc(src0->ne[1] * src1->ne[1] * sizeof(float));
+        float *mul_max_res = (float *)dst->data;
 
 		DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
 			DPU_ASSERT(dpu_prepare_xfer(dpu, mul_max_res + i * pimcontxt->pim_metadata.rows_per_dpu*src1->ne[1]*sizeof(float)));
 		}
 		DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_FROM_DPU, DPU_MRAM_HEAP_POINTER_NAME,input_offset, pimcontxt->pim_metadata.rows_per_dpu*src1->ne[1]*sizeof(float), DPU_XFER_DEFAULT));
 
+        FILE *pfile = fopen("/home/liji/upmem-pim-llm2/llama.cpp-dev/dpu/dump_dpu.txt","wb+");
+        if (pfile == NULL) {
+	        printf("/home/liji/upmem-pim-llm2/llama.cpp-dev/dpu/dump_dpu.txt open failed\n");
+	        return;
+        }
+	
+        dump_tensor_first_n(dst, 10,pfile);
+        fclose(pfile);
+
+/*
         for(int kk=0;kk<10;kk++) {
             for (int mm=0;mm<dst->ne[1];mm++)
-                printf("%d ",mul_max_res[kk*dst->ne[1]+mm]);
+                printf("%f ",mul_max_res[kk*dst->ne[1]+mm]);
 				printf("\n");
-			}
+        }
+*/
 	}
 	return 0;
 
@@ -12730,20 +12751,15 @@ static void ggml_compute_forward_mul_mat(
                                         vec_dot_type,
                                         dst->type))
                         goto UseGgmlGemm2;
-#if 0
-            printf("type=%d\n",dst->type);
-            for(int ii=0;ii<GGML_MAX_DIMS;ii++) {
-                printf("dst ne[%d]=%d\n",ii,dst->ne[ii]);
-            }
 
-			uint32_t *pres = (uint32_t *)dst->data;
-
-			for(int kk=0;kk<dst->ne[0];kk++) {
-                for (int mm=0;mm<dst->ne[1];mm++)
-					printf("%d ",pres[kk*dst->ne[1]+mm]);
-				printf("\n");
-			}
-#endif
+                        FILE *pfile =fopen("/home/liji/upmem-pim-llm2/llama.cpp-dev/dpu/dump_cpu.txt","wb+");
+						if (pfile == NULL) {
+                            printf("/home/liji/upmem-pim-llm2/llama.cpp-dev/dpu/dump_cpu.txt open failed\n");
+							return;
+						}
+							
+                        dump_tensor_first_n(dst, 10,pfile);
+						fclose(pfile);
             return;
         }
     UseGgmlGemm2:;
