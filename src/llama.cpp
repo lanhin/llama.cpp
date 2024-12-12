@@ -9316,12 +9316,11 @@ static struct ggml_tensor * llm_build_lora_mm(
 }
 
 #ifdef PIM_ENABLED		  
-
 typedef struct {
     int type;
-	//uint32_t totalsize;
-	uint32_t blocknum;
-	uint32_t blocksize; // make sure all block'size is same 
+    //uint32_t totalsize;
+    uint32_t blocknum;
+    uint32_t blocksize; // make sure all block'size is same 
 }dpu_arguments_t;
 
 // do pim mat_mul
@@ -9343,140 +9342,139 @@ int llama_load2dpu(struct llama_context *pctx,llama_model * model) {
     struct dpu_set_t dpu;
 
     // WQ-PIM allocate dpu
-	struct pim_context *pqcontext = (struct pim_context *)malloc(sizeof(struct pim_context));
-	memset(pqcontext,0,sizeof(struct pim_context));
-	DPU_ASSERT(dpu_alloc(NR_DPUS, NULL, &pqcontext->dpu_set));
-	
-	DPU_ASSERT(dpu_load(pqcontext->dpu_set, DPU_BINARY, NULL));
+    struct pim_context *pqcontext = (struct pim_context *)malloc(sizeof(struct pim_context));
+    memset(pqcontext,0,sizeof(struct pim_context));
+    DPU_ASSERT(dpu_alloc(NR_DPUS, NULL, &pqcontext->dpu_set));
+    DPU_ASSERT(dpu_load(pqcontext->dpu_set, DPU_BINARY, NULL));
 
     //ggml_table_f32_f16 tbl is transferred to pim
-	DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
-        // transfer to dpu
+    DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
+    // transfer to dpu
         DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, (void *)(ggml_table_f32_f16)));
     }
-	uint32_t tbl_len = sizeof(ggml_table_f32_f16);
+    uint32_t tbl_len = sizeof(ggml_table_f32_f16);
     DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, tbl_len, DPU_XFER_DEFAULT));
     pim_offset += sizeof(ggml_table_f32_f16);
-	// WQID = 1
+    // WQID = 1
     //pctx->pim_tensor_context.insert(std::pair<enum PIM_ID ,struct pim_context *>(PIM_WQ,pqcontext));
     pctx->pim_context_array[PIM_WQ].invalid = 1;
-	pctx->pim_context_array[PIM_WQ].pim_id = PIM_WQ;
-	pctx->pim_context_array[PIM_WQ].pimcontext = pqcontext;
+    pctx->pim_context_array[PIM_WQ].pim_id = PIM_WQ;
+    pctx->pim_context_array[PIM_WQ].pimcontext = pqcontext;
 
     // WQ metadata is loaded to dpu WRAM, make WQ's param in every layer is same
-	
-	//uint32_t n_layer = model->layers.size();
-    uint32_t n_layer = 1;
-	uint32_t il = 0;
-	dpu_get_nr_dpus(pqcontext->dpu_set, &nr_of_dpus);
-	pqcontext->pim_metadata.layer_num = n_layer;
-	pqcontext->pim_metadata.weight_type = (uint16_t)(model->layers[il].wq->type);
-	//memcpy(pqcontext->pim_metadata.ne,model->layers[il].wq->ne,sizeof(pqcontext->pim_metadata.ne));
-	//pqcontext->pim_metadata.ne[1] = model->layers[il].wq->ne[1] / nr_of_dpus;
 
-	//memcpy(pqcontext->pim_metadata.nb,model->layers[il].wq->nb,sizeof(pqcontext->pim_metadata.nb));
+    //uint32_t n_layer = model->layers.size();
+    uint32_t n_layer = 1;
+    uint32_t il = 0;
+    dpu_get_nr_dpus(pqcontext->dpu_set, &nr_of_dpus);
+    pqcontext->pim_metadata.layer_num = n_layer;
+    pqcontext->pim_metadata.weight_type = (uint16_t)(model->layers[il].wq->type);
+    //memcpy(pqcontext->pim_metadata.ne,model->layers[il].wq->ne,sizeof(pqcontext->pim_metadata.ne));
+    //pqcontext->pim_metadata.ne[1] = model->layers[il].wq->ne[1] / nr_of_dpus;
+
+    //memcpy(pqcontext->pim_metadata.nb,model->layers[il].wq->nb,sizeof(pqcontext->pim_metadata.nb));
     //pqcontext->pim_metadata.nb[0] = model->layers[il].wq->nb[0];
     // maybe has problem?
-	//pqcontext->pim_metadata.nb[1] = model->layers[il].wq->nb[0] * (pqcontext->pim_metadata.ne[0] / ggml_blck_size(model->layers[il].wq->type));
-	//pqcontext->pim_metadata.nb[2] = model->layers[il].wq->nb[1] * pqcontext->pim_metadata.ne[1];
-	
-	pqcontext->pim_metadata.size_per_row = model->layers[il].wq->nb[1];
-	//ne[1] is row num,ne[0] is col num ?
-	pqcontext->pim_metadata.rows_per_dpu = model->layers[il].wq->ne[1] / nr_of_dpus;
-	pqcontext->pim_metadata.rest_rows = model->layers[il].wq->ne[1] % nr_of_dpus;
-	// rest row is non zero
+    //pqcontext->pim_metadata.nb[1] = model->layers[il].wq->nb[0] * (pqcontext->pim_metadata.ne[0] / ggml_blck_size(model->layers[il].wq->type));
+    //pqcontext->pim_metadata.nb[2] = model->layers[il].wq->nb[1] * pqcontext->pim_metadata.ne[1];
+
+    pqcontext->pim_metadata.size_per_row = model->layers[il].wq->nb[1];
+    //ne[1] is row num,ne[0] is col num ?
+    pqcontext->pim_metadata.rows_per_dpu = model->layers[il].wq->ne[1] / nr_of_dpus;
+    pqcontext->pim_metadata.rest_rows = model->layers[il].wq->ne[1] % nr_of_dpus;
+    // rest row is non zero
     if (pqcontext->pim_metadata.rest_rows) {
-	    pqcontext->pim_metadata.layer_len = pqcontext->pim_metadata.size_per_row * (pqcontext->pim_metadata.rows_per_dpu + 1);
+        pqcontext->pim_metadata.layer_len = pqcontext->pim_metadata.size_per_row * (pqcontext->pim_metadata.rows_per_dpu + 1);
     }
-	else
+    else
     {
         pqcontext->pim_metadata.layer_len = pqcontext->pim_metadata.size_per_row * (pqcontext->pim_metadata.rows_per_dpu);
     }
-	
+
     pqcontext->pim_metadata.weight_des.type = (int64_t)(model->layers[il].wq->type);
     memcpy(pqcontext->pim_metadata.weight_des.ne,model->layers[il].wq->ne,sizeof(model->layers[il].wq->ne));
     pqcontext->pim_metadata.weight_des.ne[1] = pqcontext->pim_metadata.weight_des.ne[1] / nr_of_dpus;
 #if 0
-	pqcontext->pim_metadata.response_offset = pqcontext->pim_metadata.layer_len * n_layer;
+    pqcontext->pim_metadata.response_offset = pqcontext->pim_metadata.layer_len * n_layer;
     //8 Bytes align
-	if (pqcontext->pim_metadata.response_offset & 0x7) {
-        pqcontext->pim_metadata.response_offset = (pqcontext->pim_metadata.response_offset & 0xFFFFFFF8) + 0x8;
-	}
-	// 8 Bytes align
-	pqcontext->pim_metadata.response_len = (pqcontext->pim_metadata.rows_per_dpu + 1) * sizeof(uint32_t);
-	if (pqcontext->pim_metadata.response_len & 0x7) {
-        pqcontext->pim_metadata.response_len = (pqcontext->pim_metadata.response_len & 0xFFFFFFF8) + 0x8;
-	}
-	
-	pqcontext->pim_metadata.input_offset = pqcontext->pim_metadata.response_offset + pqcontext->pim_metadata.response_len;
+    if (pqcontext->pim_metadata.response_offset & 0x7) {
+    pqcontext->pim_metadata.response_offset = (pqcontext->pim_metadata.response_offset & 0xFFFFFFF8) + 0x8;
+    }
+    // 8 Bytes align
+    pqcontext->pim_metadata.response_len = (pqcontext->pim_metadata.rows_per_dpu + 1) * sizeof(uint32_t);
+    if (pqcontext->pim_metadata.response_len & 0x7) {
+    pqcontext->pim_metadata.response_len = (pqcontext->pim_metadata.response_len & 0xFFFFFFF8) + 0x8;
+    }
+
+    pqcontext->pim_metadata.input_offset = pqcontext->pim_metadata.response_offset + pqcontext->pim_metadata.response_len;
 #else
     //input len,response offset & len is decided later
     pqcontext->pim_metadata.input_offset = sizeof(ggml_table_f32_f16) + sizeof(struct pim_meta) + pqcontext->pim_metadata.layer_len * n_layer;
 #endif
     //Todo: NR_DPUS contexts are dispatched to different dpus(rest row is different on different dpu)
-	DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
-		// transfer to dpu
-		DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, (void *)(&pqcontext->pim_metadata)));
-	}
-	DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
-	//DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, "DPU_INPUT_ARGUMENTS", 0, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
+    DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
+    // transfer to dpu
+        DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, (void *)(&pqcontext->pim_metadata)));
+    }
+    DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
+    //DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, "DPU_INPUT_ARGUMENTS", 0, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
     pim_offset += sizeof(struct pim_meta);
     // load WQ weight data to dpu MRAM
     // row is  transposed
     uint32_t layerid;
     for (layerid = 0; layerid < n_layer; layerid++) {
-		ggml_tensor * w = model->layers[layerid].wq;
-        w->pim_type = PIM_TILING;
-		uint32_t rows_per_dpu = w->ne[1] / nr_of_dpus;
-		uint32_t size_per_row = w->nb[1];
-	    uint32_t rest_rows = w->ne[1] % nr_of_dpus;
-		// make sure every layer's transform weight is same,offset=size_per_row*(row_per_dpu+1)
-		//uint32_t layeroffset = size_per_row * (rows_per_dpu + 1);
-		uint32_t layeroffset = pqcontext->pim_metadata.layer_len;
-		//lctx.q_pim_context.pim_metadata.layer_offset[layerid] = layerid * layeroffset;
+    ggml_tensor * w = model->layers[layerid].wq;
+    w->pim_type = PIM_TILING;
+    uint32_t rows_per_dpu = w->ne[1] / nr_of_dpus;
+    uint32_t size_per_row = w->nb[1];
+    uint32_t rest_rows = w->ne[1] % nr_of_dpus;
+    // make sure every layer's transform weight is same,offset=size_per_row*(row_per_dpu+1)
+    //uint32_t layeroffset = size_per_row * (rows_per_dpu + 1);
+    uint32_t layeroffset = pqcontext->pim_metadata.layer_len;
+    //lctx.q_pim_context.pim_metadata.layer_offset[layerid] = layerid * layeroffset;
 
-		// row is send to dpu
-		DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
-			uint32_t max_rows_per_dpu;
-	        uint32_t prev_rows_dpu = 0;	   	
-			
-			if (rest_rows > 0) {
-	            if (i >= rest_rows)
-	                prev_rows_dpu = i * (rows_per_dpu + 1) + rest_rows;
-	            else
-	                prev_rows_dpu = i * (rows_per_dpu + 1);
-			} else {
-					prev_rows_dpu = i * rows_per_dpu;
-			}
+    // row is send to dpu
+    DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
+        uint32_t max_rows_per_dpu;
+        uint32_t prev_rows_dpu = 0;	   	
 
-			// every dpu's data
-	        DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, ((unsigned char *)w->data) + prev_rows_dpu*size_per_row));
-	    }
+        if (rest_rows > 0) {
+        if (i >= rest_rows)
+            prev_rows_dpu = i * (rows_per_dpu + 1) + rest_rows;
+        else
+            prev_rows_dpu = i * (rows_per_dpu + 1);
+        } else {
+        	prev_rows_dpu = i * rows_per_dpu;
+        }
 
-		DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset + layeroffset*layerid, rows_per_dpu * size_per_row, DPU_XFER_DEFAULT));
+        // every dpu's data
+        DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, ((unsigned char *)w->data) + prev_rows_dpu*size_per_row));
+    }
 
-		//rest data is send to dpu
-		if (rest_rows > 0) {
-	        DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
-	            uint32_t max_rows_per_dpu;
-		        uint32_t prev_rows_dpu = 0;	   	
-							
-	            if (i < rest_rows)
-	                prev_rows_dpu = i * (rows_per_dpu + 1) + rows_per_dpu;
-				else
-					continue;      
+    DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset + layeroffset*layerid, rows_per_dpu * size_per_row, DPU_XFER_DEFAULT));
 
-				// every dpu's data
-	            DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, w->data + prev_rows_dpu*size_per_row));
-	        }
-	     
-			DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset + layeroffset*layerid + size_per_row*rows_per_dpu, size_per_row, DPU_XFER_DEFAULT));
-		}
-	  
-		//printf("load weight W:%p\n",w);   		
+    //rest data is send to dpu
+    if (rest_rows > 0) {
+        DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
+            uint32_t max_rows_per_dpu;
+            uint32_t prev_rows_dpu = 0;	   	
+            			
+            if (i < rest_rows)
+                prev_rows_dpu = i * (rows_per_dpu + 1) + rows_per_dpu;
+            else
+            	continue;      
+
+            // every dpu's data
+            DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, w->data + prev_rows_dpu*size_per_row));
+        }
+
+        DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset + layeroffset*layerid + size_per_row*rows_per_dpu, size_per_row, DPU_XFER_DEFAULT));
+    }
+
+    //printf("load weight W:%p\n",w);   		
     }   
- 
-	return 0;
+
+    return 0;
 }
 #endif
 

@@ -12453,79 +12453,78 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 */
 int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tensor * dst)
 {
-	struct ggml_tensor *src0 = dst->src[0];
-	struct ggml_tensor *src1 = dst->src[1];
-	//WQ:type = GGML_TYPE_Q4_0
+    struct ggml_tensor *src0 = dst->src[0];
+    struct ggml_tensor *src1 = dst->src[1];
+    //WQ:type = GGML_TYPE_Q4_0
     const enum ggml_type type = src0->type;
-	// WQ:vec_dot_type = GGML_TYPE_Q8_0
-	enum ggml_type			 const vec_dot_type 		= type_traits[type].vec_dot_type;
-	ggml_from_float_t		 const from_float			= ggml_get_type_traits(vec_dot_type)->from_float;
-	ggml_from_float_to_mat_t const from_float_to_mat	= type_traits[vec_dot_type].from_float_to_mat;
-	int64_t 				 const vec_dot_num_rows 	= type_traits[type].nrows;
-	int64_t 				 const matmul_num_cols		= type_traits[type].ncols;
-	int64_t 				 const blck_size_interleave = ggml_get_type_traits(type)->blck_size_interleave;
-	ggml_gemv_t 			 const gemv 				= type_traits[type].gemv;
-	ggml_gemm_t 			 const gemm 				= type_traits[type].gemm;
+    // WQ:vec_dot_type = GGML_TYPE_Q8_0
+    enum ggml_type  const vec_dot_type  = type_traits[type].vec_dot_type;
+    ggml_from_float_t  const from_float = ggml_get_type_traits(vec_dot_type)->from_float;
+    ggml_from_float_to_mat_t const from_float_to_mat = type_traits[vec_dot_type].from_float_to_mat;
+    int64_t   const vec_dot_num_rows = type_traits[type].nrows;
+    int64_t   const matmul_num_cols = type_traits[type].ncols;
+    int64_t   const blck_size_interleave = ggml_get_type_traits(type)->blck_size_interleave;
+    ggml_gemv_t   const gemv  = type_traits[type].gemv;
+    ggml_gemm_t   const gemm  = type_traits[type].gemm;
 
     GGML_TENSOR_BINARY_OP_LOCALS
     const int ith = params->ith;
     const int nth = params->nth;
-	
+
     /*WQ:src0->type = GGML_TYPE_Q4_0
-         src1->type = GGML_TYPE_F32
-         vec_dot_type = GGML_TYPE_Q8_0*/
-	if (src1->type != vec_dot_type) {
-		char * wdata = params->wdata;
+     src1->type = GGML_TYPE_F32
+     vec_dot_type = GGML_TYPE_Q8_0*/
+    if (src1->type != vec_dot_type) {
+        char * wdata = params->wdata;
 
-		const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
-		const size_t nbw2 = nbw1*ne11;
-		const size_t nbw3 = nbw2*ne12;
+        const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
+        const size_t nbw2 = nbw1*ne11;
+        const size_t nbw3 = nbw2*ne12;
 
-		assert(params->wsize >= ne13*nbw3);
-		GGML_ASSERT(src1->type == GGML_TYPE_F32);
+        assert(params->wsize >= ne13*nbw3);
+        GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
         /*Token Quantify*/
-		for (int64_t i13 = 0; i13 < ne13; ++i13) {
-			for (int64_t i12 = 0; i12 < ne12; ++i12) {
-				int64_t i11_processed = 0;
-				if ((ggml_n_dims(src1) == 2) && from_float_to_mat && gemm) {
-					for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
-						from_float_to_mat((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-										  (void *)				 (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-										  4, ne10, blck_size_interleave);
-					}
-					i11_processed = ne11 - ne11 % 4;
-				}
-				//src1:fp32->INT8
-				for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
-					from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
-						   (void *) 			  (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
-						   ne10);
-				}
-			}
-		}
-	}
+        for (int64_t i13 = 0; i13 < ne13; ++i13) {
+            for (int64_t i12 = 0; i12 < ne12; ++i12) {
+                int64_t i11_processed = 0;
+                if ((ggml_n_dims(src1) == 2) && from_float_to_mat && gemm) {
+                    for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
+                        from_float_to_mat((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                        (void *) (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                        4, ne10, blck_size_interleave);
+                    }
+                    i11_processed = ne11 - ne11 % 4;
+                }
+                //src1:fp32->INT8
+                for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
+                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11),
+                    (void *) 			  (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                    ne10);
+                }
+            }
+        }
+    }
 
-	
-	if ((src1->pim_type == PIM_BROADCAST) && (src0->pim_type == PIM_TILING))
-	{
+
+    if ((src1->pim_type == PIM_BROADCAST) && (src0->pim_type == PIM_TILING))
+    {
         const void* wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
-	    struct pim_context *pimcontxt;
-		if (dst->ppim_context[dst->pimid].invalid)
-		    pimcontxt = dst->ppim_context[dst->pimid].pimcontext;
+        struct pim_context *pimcontxt;
+        if (dst->ppim_context[dst->pimid].invalid)
+            pimcontxt = dst->ppim_context[dst->pimid].pimcontext;
 
-		block_q8_0 *pinputblock = (block_q8_0 *)wdata;
-		printf("d=%u\n",pinputblock[0].d);
-         for (int kkk=0;kkk<QK8_0;kkk++) {
-		 	 
-		     printf("%d ",pinputblock[0].qs[kkk]);
-         }
-		 printf("\n");
+        block_q8_0 *pinputblock = (block_q8_0 *)wdata;
+        printf("d=%u\n",pinputblock[0].d);
+        for (int kkk=0;kkk<QK8_0;kkk++) {
+            printf("%d ",pinputblock[0].qs[kkk]);
+        }
+        printf("\n");
 
-		// input & output descrpit
+        // input & output descrpit
         uint32_t i;
         struct dpu_set_t dpu;
-		uint32_t input_offset = pimcontxt->pim_metadata.input_offset;
+        uint32_t input_offset = pimcontxt->pim_metadata.input_offset;
         // input & output descript 
         pim_matrix_des input_descript;
         //pim_matrix_des *poutdescript = &(pimcontxt->pim_metadata.outputdes);
@@ -12536,61 +12535,53 @@ int ggml_dpu_compute(const struct ggml_compute_params * params, struct ggml_tens
         }
         memcpy(input_descript.ne,src1->ne,sizeof(src1->ne));
 
-		printf("sizeof(src1->ne)=%d\n",sizeof(src1->ne));
+        printf("sizeof(src1->ne)=%d\n",sizeof(src1->ne));
 
         // output type is fixed:GGML_TYPE_F32
         //poutdescript->type = GGML_TYPE_F32;
-		//memcpy(poutdescript->ne,src1->ne,sizeof(src1->ne));
-		//poutdescript->ne[0] = src0->ne[0];
+        //memcpy(poutdescript->ne,src1->ne,sizeof(src1->ne));
+        //poutdescript->ne[0] = src0->ne[0];
 
         // input descrpit is broadcasted to dpu
-		DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
-			DPU_ASSERT(dpu_prepare_xfer(dpu, &input_descript));
-		}
-		DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , sizeof(pim_matrix_des), DPU_XFER_DEFAULT));
+        DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
+        	DPU_ASSERT(dpu_prepare_xfer(dpu, &input_descript));
+        }
+        DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , sizeof(pim_matrix_des), DPU_XFER_DEFAULT));
         input_offset += sizeof(pim_matrix_des);
 
-		// broadcast tensor data is broadcasted to dpu
-		uint32_t bclen = ggml_row_size(vec_dot_type, ne10)*ne11*ne12*ne13;
-		DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
-			DPU_ASSERT(dpu_prepare_xfer(dpu, wdata));
-		}
-		DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , bclen, DPU_XFER_DEFAULT));
+        // broadcast tensor data is broadcasted to dpu
+        uint32_t bclen = ggml_row_size(vec_dot_type, ne10)*ne11*ne12*ne13;
+        DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
+        	DPU_ASSERT(dpu_prepare_xfer(dpu, wdata));
+        }
+        DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , bclen, DPU_XFER_DEFAULT));
         input_offset += bclen;
-		// 启动DPU，load数据
-		DPU_ASSERT(dpu_launch(pimcontxt->dpu_set, DPU_SYNCHRONOUS));
-		//打印dpu log
-		DPU_FOREACH(pimcontxt->dpu_set, dpu) {
-			DPU_ASSERT(dpulog_read_for_dpu(dpu.dpu, stdout));			
-		}
+        // 启动DPU，load数据
+        DPU_ASSERT(dpu_launch(pimcontxt->dpu_set, DPU_SYNCHRONOUS));
+        //打印dpu log
+        DPU_FOREACH(pimcontxt->dpu_set, dpu) {
+            DPU_ASSERT(dpulog_read_for_dpu(dpu.dpu, stdout));
+        }
 
-		//todo:read response from dpu
-		//float *mul_max_res = (float *)malloc(src0->ne[1] * src1->ne[1] * sizeof(float));
+        //todo:read response from dpu
+        //float *mul_max_res = (float *)malloc(src0->ne[1] * src1->ne[1] * sizeof(float));
         float *mul_max_res = (float *)dst->data;
 
-		DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
-			DPU_ASSERT(dpu_prepare_xfer(dpu, mul_max_res + i * pimcontxt->pim_metadata.rows_per_dpu*src1->ne[1]*sizeof(float)));
-		}
-		DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_FROM_DPU, DPU_MRAM_HEAP_POINTER_NAME,input_offset, pimcontxt->pim_metadata.rows_per_dpu*src1->ne[1]*sizeof(float), DPU_XFER_DEFAULT));
+        DPU_FOREACH(pimcontxt->dpu_set, dpu, i) {
+            DPU_ASSERT(dpu_prepare_xfer(dpu, mul_max_res + i * pimcontxt->pim_metadata.rows_per_dpu*src1->ne[1]));
+        }
+        DPU_ASSERT(dpu_push_xfer(pimcontxt->dpu_set, DPU_XFER_FROM_DPU, DPU_MRAM_HEAP_POINTER_NAME,input_offset, pimcontxt->pim_metadata.rows_per_dpu*src1->ne[1]*sizeof(float), DPU_XFER_DEFAULT));
 
         FILE *pfile = fopen("/home/liji/upmem-pim-llm2/llama.cpp-dev/dpu/dump_dpu.txt","wb+");
         if (pfile == NULL) {
-	        printf("/home/liji/upmem-pim-llm2/llama.cpp-dev/dpu/dump_dpu.txt open failed\n");
-	        return;
+            printf("/home/liji/upmem-pim-llm2/llama.cpp-dev/dpu/dump_dpu.txt open failed\n");
+            return;
         }
-	
-        dump_tensor_first_n(dst, 10,pfile);
-        fclose(pfile);
 
-/*
-        for(int kk=0;kk<10;kk++) {
-            for (int mm=0;mm<dst->ne[1];mm++)
-                printf("%f ",mul_max_res[kk*dst->ne[1]+mm]);
-				printf("\n");
-        }
-*/
-	}
-	return 0;
+        dump_tensor_first_n(dst, ne01*ne11,pfile);
+        fclose(pfile);
+    }
+    return 0;
 
 }
 #endif
@@ -12758,7 +12749,7 @@ static void ggml_compute_forward_mul_mat(
 							return;
 						}
 							
-                        dump_tensor_first_n(dst, 10,pfile);
+                        dump_tensor_first_n(dst, ne01*ne11,pfile);
 						fclose(pfile);
             return;
         }

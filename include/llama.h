@@ -60,70 +60,70 @@ extern "C" {
 #ifdef PIM_ENABLED
 #define LAYERNUM 32
 
-	typedef struct	{
-		int32_t type;
-        int32_t layerid;
-		int64_t ne[GGML_MAX_DIMS];
-	}pim_matrix_des; // 8 Byte align
+typedef struct {
+    int32_t type;
+    int32_t layerid;
+    int64_t ne[GGML_MAX_DIMS];
+}pim_matrix_des; // 8 Byte align
 
-	
-	struct pim_meta {
-		// 每个类型的tensor在DPU中的metadata
-		uint16_t layer_num;
-		uint16_t weight_type;
-		uint16_t rows_per_dpu;
-		uint16_t rest_rows;
-		uint32_t size_per_row;
-		uint32_t layer_len;
-	    // 每一层串行计算，dpu的输入也只需要一个地址空间
-	    uint32_t input_offset;
-	    uint32_t input_len;
-	    // 每一层串行计算，dpu的返回值只需一个地址空间
-	    uint32_t response_offset;
-        uint32_t response_len;
 
-        pim_matrix_des weight_des;
-		//pim_inout_des inputdes;
-		//pim_inout_des outputdes;
-		//int64_t ne[GGML_MAX_DIMS];
-		//size_t	nb[GGML_MAX_DIMS];
-	};
-	
-	struct pim_context {
-		//#define DPU_MRAM_HEAP_POINTER_NAME
-		struct dpu_set_t dpu_set;
-		char param_name[20];
-		uint32_t pim_type;
-		//uint32_t q_dpu_offset = 0;
-		uint32_t weightq_load_flag;
-	
-		struct pim_meta pim_metadata;
-	
-	/*
-		// 每个类型的tensor在DPU中的metadata
-		uint16_t layer_num;
-		uint16_t weight_type;
-		uint32_t size_per_row;
-		uint32_t rownum_per_layer[LAYERNUM];
-		uint32_t layer_offset[LAYERNUM];
-		// 每一层串行计算，dpu的返回值只需一个地址空间
-		uint32_t response_offset_per_layer;
-		uint32_t response_len_per_layer;	
-	*/
-		/*
-		uint32_t rownum_per_layer[LAYERNUM];
-		uint32_t layer_offset[LAYERNUM];
-		uint32_t response_offset_per_layer[LAYERNUM];
-		uint32_t response_len_per_layer[LAYERNUM];	
-		*/
-	};
-	
-	//typedef std::map<enum PIM_ID,struct pim_context *>MAP_PIMContext;
-	struct pim_context_map {
-		uint8_t invalid;
-		enum PIM_ID pim_id;
-		struct pim_context *pimcontext;
-	};
+struct pim_meta {
+    // 每个类型的tensor在DPU中的metadata
+    uint16_t layer_num;
+    uint16_t weight_type;
+    uint16_t rows_per_dpu;
+    uint16_t rest_rows;
+    uint32_t size_per_row;
+    uint32_t layer_len;
+    // 每一层串行计算，dpu的输入也只需要一个地址空间
+    uint32_t input_offset;
+    uint32_t input_len;
+    // 每一层串行计算，dpu的返回值只需一个地址空间
+    uint32_t response_offset;
+    uint32_t response_len;
+
+    pim_matrix_des weight_des;
+    //pim_inout_des inputdes;
+    //pim_inout_des outputdes;
+    //int64_t ne[GGML_MAX_DIMS];
+    //size_t	nb[GGML_MAX_DIMS];
+};
+
+struct pim_context {
+    //#define DPU_MRAM_HEAP_POINTER_NAME
+    struct dpu_set_t dpu_set;
+    char param_name[20];
+    uint32_t pim_type;
+    //uint32_t q_dpu_offset = 0;
+    uint32_t weightq_load_flag;
+
+    struct pim_meta pim_metadata;
+
+    /*
+    // 每个类型的tensor在DPU中的metadata
+    uint16_t layer_num;
+    uint16_t weight_type;
+    uint32_t size_per_row;
+    uint32_t rownum_per_layer[LAYERNUM];
+    uint32_t layer_offset[LAYERNUM];
+    // 每一层串行计算，dpu的返回值只需一个地址空间
+    uint32_t response_offset_per_layer;
+    uint32_t response_len_per_layer;	
+    */
+    /*
+    uint32_t rownum_per_layer[LAYERNUM];
+    uint32_t layer_offset[LAYERNUM];
+    uint32_t response_offset_per_layer[LAYERNUM];
+    uint32_t response_len_per_layer[LAYERNUM];	
+    */
+};
+
+//typedef std::map<enum PIM_ID,struct pim_context *>MAP_PIMContext;
+struct pim_context_map {
+    uint8_t invalid;
+    enum PIM_ID pim_id;
+    struct pim_context *pimcontext;
+};
 #endif
 
 
