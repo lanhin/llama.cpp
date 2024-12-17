@@ -888,6 +888,10 @@ struct common_init_result common_init_from_params(common_params & params) {
         return iparams;
     }
 
+#ifdef PIM_KERNEL
+    llama_load2dpu(lctx, model);
+#endif // PIM_KERNEL
+
     if (!params.control_vectors.empty()) {
         if (params.control_vector_layer_start <= 0) params.control_vector_layer_start = 1;
         if (params.control_vector_layer_end   <= 0) params.control_vector_layer_end   = llama_n_layer(model);

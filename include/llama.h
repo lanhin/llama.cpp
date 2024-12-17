@@ -423,6 +423,15 @@ extern "C" {
                      struct llama_model * model,
             struct llama_context_params   params);
 
+#ifdef PIM_KERNEL
+  enum WeightId {
+    WQ,
+    WCNT
+  };
+  LLAMA_API int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_model * model, uint32_t offset_base);
+  LLAMA_API int llama_load2dpu(struct llama_context * ctx, struct llama_model * model);
+#endif // PIM_KERNEL
+
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
 

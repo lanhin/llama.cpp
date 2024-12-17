@@ -119,6 +119,11 @@ GGML_OPENBLAS := 1
 DEPRECATE_WARNING := 1
 endif
 
+ifdef LLAMA_PIM
+PIM_KERNEL := 1
+DEPRECATE_WARNING := 1
+endif
+
 ifdef LLAMA_OPENBLAS64
 GGML_OPENBLAS64 := 1
 DEPRECATE_WARNING := 1
@@ -553,6 +558,12 @@ ifndef GGML_NO_OPENMP
 		MK_LDFLAGS  += -L/usr/lib/llvm-10/lib
 	endif # GGML_MUSA
 endif # GGML_NO_OPENMP
+
+ifdef PIM_KERNEL
+	MK_CPPFLAGS += -DPIM_KERNEL  --std=c++11  `dpu-pkg-config --cflags --libs dpu`
+	MK_CFLAGS   += -DPIM_KERNEL  -Wall -Wextra  `dpu-pkg-config --cflags --libs dpu`
+	MK_LDFLAGS  += `dpu-pkg-config --libs dpu`
+endif # PIM_ENABLED
 
 ifdef GGML_OPENBLAS
 	MK_CPPFLAGS += -DGGML_USE_BLAS $(shell pkg-config --cflags-only-I openblas)
@@ -1020,6 +1031,7 @@ $(info   - LLAMA_RPC)
 $(info   - LLAMA_SYCL)
 $(info   - LLAMA_SYCL_F16)
 $(info   - LLAMA_OPENBLAS)
+$(info   - LLAMA_PIM)
 $(info   - LLAMA_OPENBLAS64)
 $(info   - LLAMA_BLIS)
 $(info   - LLAMA_NO_LLAMAFILE)

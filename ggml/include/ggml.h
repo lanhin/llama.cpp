@@ -209,6 +209,17 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifdef PIM_KERNEL
+#ifdef __cplusplus
+extern "C" {
+#endif // __cplusplus
+#include<dpu.h>
+#include<dpu_log.h>
+#ifdef __cplusplus
+}
+#endif // __cplusplus
+#endif // PIM_KERNEL
+
 #define GGML_FILE_MAGIC   0x67676d6c // "ggml"
 #define GGML_FILE_VERSION 2
 
@@ -576,6 +587,38 @@ extern "C" {
         GGML_TENSOR_FLAG_LOSS   =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
     };
 
+#if defined(PIM_KERNEL) || defined(PIM_KERNEL_DPU)
+  typedef struct {
+    int32_t type;
+    int32_t layerid;
+    int64_t ne[GGML_MAX_DIMS];
+  }pim_matrix_des; // 8 Byte align
+
+  struct pim_meta {
+    // 每个类型的tensor在DPU中的metadata
+    uint16_t layer_num;
+    uint16_t weight_type;
+    uint16_t rows_per_dpu;
+    uint16_t rest_rows;
+
+    uint32_t layer_len;
+    // 每一层串行计算，dpu的输入也只需要一个地址空间
+    uint32_t input_offset;
+  };
+#endif // PIM_KERNRL || PIM_KERNEL_DPU
+
+#ifdef PIM_KERNEL
+  struct pim_context {
+    //#define DPU_MRAM_HEAP_POINTER_NAME
+    struct dpu_set_t dpu_set;
+    char param_name[20];
+    uint32_t pim_type;
+    uint32_t weightq_load_flag;
+
+    struct pim_meta pim_metadata;
+  };
+#endif // PIM_KERNEL
+
     // n-dimensional tensor
     struct ggml_tensor {
         enum ggml_type type;
@@ -611,7 +654,13 @@ extern "C" {
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
-        // char padding[4];
+#ifdef PIM_KERNEL
+        // For PIM
+        struct dpu_set_t* dpu_set;
+        size_t inout_offset;
+        int32_t layerid;
+        char padding[8];
+#endif // PIM_KERNEL
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
@@ -700,9 +749,10 @@ extern "C" {
     GGML_API int64_t ggml_cycles(void);
     GGML_API int64_t ggml_cycles_per_ms(void);
 
+#ifndef PIM_KERNEL_DPU
     // accepts a UTF-8 path, even on Windows
     GGML_API FILE *  ggml_fopen(const char * fname, const char * mode);
-
+#endif
     GGML_API void    ggml_numa_init(enum ggml_numa_strategy numa); // call once for better performance on NUMA systems
     GGML_API bool    ggml_is_numa(void); // true if init detected that system has >1 NUMA node
 

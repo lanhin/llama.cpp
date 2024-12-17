@@ -17302,35 +17302,132 @@ static void ggml_compute_forward_opt_step_adamw(
     }
 }
 
+#ifdef PIM_KERNEL
 static int dpu_launch_gemv_async(
         const struct ggml_tensor * input,
-        const struct ggml_tensor * w_i,
-        struct ggml_tensor * res_i) {
-    // TODO: to implement
+        char* wdata,
+        const struct ggml_tensor * w,
+        struct ggml_tensor * res,
+	int32_t layer_idx) {
+    struct dpu_set_t dpu_set, dpu;
+    uint32_t i;
+    pim_matrix_des input_descript;
+    enum ggml_type    const vec_dot_type    = type_traits[w->type].vec_dot_type;
+    input_descript.type = (int32_t)vec_dot_type;
+    input_descript.layerid = layer_idx;
+    memcpy(input_descript.ne, input->ne, sizeof(input->ne));
+
+    uint32_t input_offset = res->inout_offset;
+    dpu_set = *(res->dpu_set);
+    // broadcast input metadata
+    DPU_FOREACH(dpu_set, dpu, i) {
+        DPU_ASSERT(dpu_prepare_xfer(dpu, &input_descript));
+    }
+    DPU_ASSERT(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , sizeof(pim_matrix_des), DPU_XFER_DEFAULT));
+    input_offset += sizeof(pim_matrix_des);
+
+    // broadcast input data
+    uint32_t bclen = ggml_row_size(vec_dot_type, input->ne[0])*input->ne[1]*input->ne[2]*input->ne[3];
+    DPU_FOREACH(dpu_set, dpu, i) {
+        DPU_ASSERT(dpu_prepare_xfer(dpu, wdata));
+    }
+    DPU_ASSERT(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , bclen, DPU_XFER_DEFAULT));
+
+    res->inout_offset = input_offset;
+
+    // 启动DPU
+    DPU_ASSERT(dpu_launch(dpu_set, DPU_ASYNCHRONOUS));
+
     return 0;
 }
 
-static int dpu_kernel_barrier() {
-    // TODO: to implement
-    // dpu_sync(dpu_set);
+static __inline__ void dpu_kernel_barrier(struct dpu_set_t dpu_set) {
+    struct dpu_set_t dpu;
+    dpu_sync(dpu_set);
+    //打印dpu log
+    DPU_FOREACH(dpu_set, dpu) {
+        DPU_ASSERT(dpulog_read_for_dpu(dpu.dpu, stdout));
+    }
+    return;
+}
+
+static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_tensor *w, struct ggml_tensor *res) {
+    struct dpu_set_t dpu_set, dpu;
+    float *mul_max_res = (float *)res->data;
+    uint32_t output_offset = res->inout_offset;
+    dpu_set = *(res->dpu_set);
+    int nr_dpus;
+    dpu_get_nr_dpus(dpu_set, &nr_dpus);
+    int rows_per_dpu = w->ne[1] / nr_dpus;
+
+    uint32_t i;
+    DPU_FOREACH(dpu_set, dpu, i) {
+        DPU_ASSERT(dpu_prepare_xfer(dpu, mul_max_res + i * rows_per_dpu*input->ne[1]));
+    }
+    DPU_ASSERT(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU, DPU_MRAM_HEAP_POINTER_NAME, output_offset, rows_per_dpu*input->ne[1]*sizeof(float), DPU_XFER_DEFAULT));
     return 0;
 }
+#endif // PIM_KERNEL
 
 static void ggml_compute_forward_gemv_par(
         const struct ggml_compute_params * params,
         struct ggml_tensor * dst) {
+
+#ifdef PIM_KERNEL
+    const int ith = params->ith;
+    const int nth = params->nth;
+
     // get parallel param
     int parallelism = ggml_get_op_params_i32(dst, 0);
     // get layer index
     int layer_idx = ggml_get_op_params_i32(dst, 1);
 
+    // TODO: some logic could be moved out of the loop
     const struct ggml_tensor * input = dst->src[0];
     for (int i = 1; i <= parallelism; i++) {
         const struct ggml_tensor * w_i = dst->src[i];
         struct ggml_tensor * res_i = dst->src[i + 3];
-        dpu_launch_gemv_async(input, w_i, res_i);
+        enum ggml_type const vec_dot_type = type_traits[w_i->type].vec_dot_type;
+        ggml_from_float_t const from_float = type_traits[vec_dot_type].from_float;
+
+        char* wdata = (input->type == vec_dot_type) ? input->data : params->wdata;
+        if (input->type != vec_dot_type) {
+            const size_t nbw1 = ggml_row_size(vec_dot_type, input->ne[0]);
+            const size_t nbw2 = nbw1*input->ne[1];
+            const size_t nbw3 = nbw2*input->ne[2];
+
+            assert(params->wsize >= input->ne[3]*nbw3);
+            GGML_ASSERT(input->type == GGML_TYPE_F32);
+            // Only consider Q4_0, more types to be supported
+            GGML_ASSERT(w_i->type == GGML_TYPE_Q4_0);
+
+            for (int64_t i13 = 0; i13 < input->ne[3]; ++i13) {
+              for (int64_t i12 = 0; i12 < input->ne[2]; ++i12) {
+                for (int64_t i11 = ith; i11 < input->ne[1]; i11 += nth) {
+                  from_float((float *)((char *) input->data + i13*input->nb[3] + i12*input->nb[2] + i11*input->nb[1]),
+                             (void *)            (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1),
+                             input->ne[0]);
+                }
+              }
+            }
+        }
+
+        // To debug, set this value manually?
+        //uint32_t input_offset = pimcontxt->pim_metadata.input_offset;
+        // after launch, wdata could be reused
+        dpu_launch_gemv_async(input, wdata, w_i, res_i, layer_idx);
     }
-    dpu_kernel_barrier();
+    for (int i = 1; i <= parallelism; i++) {
+        const struct ggml_tensor * w_i = dst->src[i];
+        struct ggml_tensor * res_i = dst->src[i + 3];
+        dpu_kernel_barrier(*(res_i->dpu_set));
+        dpu_get_gemv_res(input, w_i, res_i);
+    }
+
+#else
+    GGML_ASSERT(0 && "GEMV_PAR_OP cannot be executed without PIM_KERNEL build.");
+#endif // PIM_KERNEL
+    return;
 }
 
 /////////////////////////////////
