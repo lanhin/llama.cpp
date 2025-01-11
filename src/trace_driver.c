@@ -200,7 +200,7 @@ void dump_tensor(const struct ggml_tensor * tensor, FILE * fout) {
       case GGML_TYPE_Q4_0:
         {
           const block_q4_0 * x = tensor->data;
-          fprintf(fout, "i = %d, delta = %f, qs: ", i, GGML_FP16_TO_FP32(x[i].d));
+          fprintf(fout, "i = %d, delta = %u->%f, qs: ", i, x[i].d, GGML_FP16_TO_FP32(x[i].d));
           for (int j=0; j < QK4_0/2; j++) {
             const int v0 = (x[i].qs[j] & 0x0f) - 8;
             const int v1 = (x[i].qs[j]  >> 4) - 8;
@@ -212,7 +212,7 @@ void dump_tensor(const struct ggml_tensor * tensor, FILE * fout) {
       case GGML_TYPE_Q8_0:
         {
           const block_q8_0 * x = tensor->data;
-          fprintf(fout, "i = %d, delta = %f, qs:", i, GGML_FP16_TO_FP32(x[i].d));
+          fprintf(fout, "i = %d, delta = %u->%f, qs:", i, x[i].d, GGML_FP16_TO_FP32(x[i].d));
           for (int j=0; j < QK8_0; j++) {
             const int v0 = (x[i].qs[j]);
             fprintf(fout, "%d,", v0);

@@ -12481,6 +12481,17 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
+static int dpu_launch_gemv_async(
+        const struct ggml_tensor * input,
+        char* wdata,
+        const struct ggml_tensor * w,
+        struct ggml_tensor * res,
+        int32_t layer_idx);
+
+static __inline__ void dpu_kernel_barrier(struct dpu_set_t dpu_set);
+
+static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_tensor *w, struct ggml_tensor *res);
+
 static void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -12493,6 +12504,7 @@ static void ggml_compute_forward_mul_mat(
     const char* filenameb = "b.tensor";
     const char* filenamebq = "b_quant.tensor";
     const char* filenamec = "c.tensor";
+    const char* filenamec_pim = "c_pim.tensor";
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -12598,6 +12610,15 @@ UseGgmlGemm1:;
             }
         }
 
+	if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
+          dpu_launch_gemv_async(src1, wdata, src0, dst, 0);
+          dpu_kernel_barrier(*(dst->dpu_set));
+          dpu_get_gemv_res(src1, src0, dst);
+          if (to_export && !exported) {
+            tensor_export(dst, filenamec_pim);
+          }
+          return;
+        }
         if (to_export && !exported) {
           struct ggml_tensor * quant_src1 = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
           const char* quant_name = "token_quantified";
@@ -17331,7 +17352,8 @@ static int dpu_launch_gemv_async(
     DPU_FOREACH(dpu_set, dpu, i) {
         DPU_ASSERT(dpu_prepare_xfer(dpu, wdata));
     }
-    DPU_ASSERT(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , bclen, DPU_XFER_DEFAULT));
+    DPU_ASSERT(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset, bclen, DPU_XFER_DEFAULT));
+    input_offset += bclen;
 
     res->inout_offset = input_offset;
 
@@ -17355,6 +17377,7 @@ static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_te
     struct dpu_set_t dpu_set, dpu;
     float *mul_max_res = (float *)res->data;
     uint32_t output_offset = res->inout_offset;
+    printf("%s: offset = %d\n", __FUNCTION__, output_offset);
     dpu_set = *(res->dpu_set);
     int nr_dpus;
     dpu_get_nr_dpus(dpu_set, &nr_dpus);
@@ -17386,7 +17409,7 @@ static void ggml_compute_forward_gemv_par(
     const struct ggml_tensor * input = dst->src[0];
     for (int i = 1; i <= parallelism; i++) {
         const struct ggml_tensor * w_i = dst->src[i];
-        struct ggml_tensor * res_i = dst->src[i + 3];
+        struct ggml_tensor * res_i = dst->src[i + 3]; // like none_q, none_k, none_v, etc.
         enum ggml_type const vec_dot_type = type_traits[w_i->type].vec_dot_type;
         ggml_from_float_t const from_float = type_traits[vec_dot_type].from_float;
 

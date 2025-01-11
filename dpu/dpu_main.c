@@ -17,6 +17,8 @@
 #define GGML_COMMON_DECL_C
 #include "../ggml/src/ggml-common.h"
 
+#define PRINT 0
+
 __mram_ptr float *ptable_f32_f16;
 
 inline static float lookup_fp16_to_fp32(uint16_t f) {
@@ -107,19 +109,25 @@ int main() {
     uint32_t offset = table_f32_f16_len;
     int input_row_size,input_cols;
     float *psumf;
+
+#if PRINT
     printf("table_f32_f16_len=%d\n",table_f32_f16_len);
 
     for (int uuu=0;uuu<16;uuu++) {
         printf("FP16_TO_FP32[%d]=%f\n",uuu,FP16_TO_FP32(uuu));
     }
+#endif
 
     //weight metadata
     uint32_t weightmetadatabase = (uint32_t) (DPU_MRAM_HEAP_POINTER + offset);
     struct pim_meta *cache_meta = (struct pim_meta *) mem_alloc(sizeof(struct pim_meta));
     mram_read((__mram_ptr void const*) (weightmetadatabase), cache_meta, sizeof(struct pim_meta));
 
+#if PRINT
     printf("layer_num: %d, weight_type=%d,rows_per_dpu=%d,rest_rows=%d,input_offset=%d",
         cache_meta->layer_num,cache_meta->weight_type,cache_meta->rows_per_dpu,cache_meta->rest_rows,cache_meta->input_offset);
+#endif
+
     // todo:rest row is existed, first thread in every dpu can one more row
     uint16_t weight_rows_cur_thread;
     if (cache_meta->rest_rows) {
@@ -133,15 +141,19 @@ int main() {
 
     //input metadata
     offset += (cache_meta->layer_len * cache_meta->layer_num);
+#if PRINT
     printf("layer_len=%d,offset=%d\n",cache_meta->layer_len,offset);
+#endif
     uint32_t inputmetadatabase = weightmetadatabase + sizeof(struct pim_meta) + cache_meta->layer_len * cache_meta->layer_num;   
     pim_matrix_des *pinputcache = (pim_matrix_des *) mem_alloc(sizeof(pim_matrix_des));
     mram_read((__mram_ptr void const*) (inputmetadatabase), pinputcache, sizeof(pim_matrix_des));
     input_cols = pinputcache->ne[1];
+#if PRINT
     printf("input_type=%d,layerID=%d\n",pinputcache->type,pinputcache->layerid);
     for(int nn=0;nn<GGML_MAX_DIMS;nn++) {
         printf("ne[%d]=%lld\n",nn,pinputcache->ne[nn]);
     }
+#endif
 
     assert(cache_meta->weight_type == ((uint16_t)GGML_TYPE_Q4_0) && "Only support Q4_0 weight.");
     //weight info: GGML_TYPE_Q4_0 default
@@ -157,8 +169,9 @@ int main() {
         __mram_ptr block_q8_0 *pinput_base = (__mram_ptr block_q8_0 *)(DPU_MRAM_HEAP_POINTER + cache_meta->input_offset + sizeof(pim_matrix_des));
         psumf = (float *)mem_alloc(sizeof(float)*input_cols*weight_rows_cur_thread);
         memset(psumf, 0 ,sizeof(float)*input_cols*weight_rows_cur_thread);
-
+#if PRINT
         printf("input_cols=%d,rows_cur_thread=%d,nb=%d,input_row_size=%d\n",input_cols,weight_rows_cur_thread,nb,input_row_size);
+#endif
         block_q4_0 *pweight_cache = (block_q4_0 *) mem_alloc(sizeof(block_q4_0)*nb);
         block_q8_0 *pinput_cache = (block_q8_0 *) mem_alloc(sizeof(block_q8_0)*nb);          
 
@@ -166,23 +179,29 @@ int main() {
         for(int l = 0;l < input_cols;l++) {
             __mram_ptr block_q8_0 *pinput = pinput_base + l*nb;
             mram2wram(pinput, pinput_cache, sizeof(block_q8_0)*nb);
+#if PRINT
             printf("input:\n");
             printf("d=%u\n",pinput[0].d);
             for (int kkk=0;kkk<QK8_0;kkk++) {
                 printf("%d ",pinput[0].qs[kkk]);
             }
             printf("\n");
-
+#endif
             for(int k = 0;k < weight_rows_cur_thread;k++) {
                 //block_q4_0 *pqlayer0weight = (block_q4_0 *)(weightmetadatabase + sizeof(struct pim_meta) + cache_meta->layer_len*k);
                 __mram_ptr block_q4_0 *pweight = pweight_base + pinputcache->layerid*cache_meta->layer_len + k*nb;
                 mram2wram(pweight, pweight_cache, sizeof(block_q4_0)*nb);
-
+#if PRINT
                 if (k == 0) {
                     printf("pweight_cache[0].d=%d\n",pweight_cache[0].d);
-                    for (int kkk=0;kkk<QK4_0/2;kkk++) 
-                        printf("pweight_cache[0].qs=%d\n",pweight_cache[0].qs[kkk]);
+                    for (int kkk=0;kkk<QK4_0/2;kkk++) {
+		      int v0 = (pweight_cache[0].qs[kkk] & 0x0f) - 8;
+		      int v1 = (pweight_cache[0].qs[kkk]  >> 4) - 8;
+
+		      printf("pweight_cache[0].qs=%d, %d\n",v0, v1);
+		    }
                 }
+#endif
 
                 for (int i = 0; i < nb; i++) {
                     //printf("input_col:%d,weight_row:%d\n",l,k);
@@ -203,12 +222,13 @@ int main() {
     }
 
     offset += (sizeof(pim_matrix_des) + input_row_size * input_cols);
-
-    for(int iii=512;iii<528;iii++) {
+#if PRINT
+    for(int iii=512;iii<4096;iii+=128) {
         printf("psumf[%d]=%f\n",iii,psumf[iii]);
     }
 
-    printf("offset=%d\n",offset);	
+    printf("offset=%d\n",offset);
+#endif
     // Write C Matrix to current MRAM block
     wram2mram((__mram_ptr void *) (DPU_MRAM_HEAP_POINTER + offset),psumf,sizeof(float)*input_cols*weight_rows_cur_thread);
     return 0;

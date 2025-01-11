@@ -19,10 +19,12 @@ int main(int argc, char** argv) {
   const char* filenameb = "b.tensor";
   const char* filenamebq = "b_quant.tensor";
   const char* filenamec = "c.tensor";
+  const char* filenamec_p = "c_pim.tensor";
   struct ggml_tensor * ts_a = tensor_import(filenamea);
   struct ggml_tensor * ts_b = tensor_import(filenameb);
   struct ggml_tensor * ts_bq = tensor_import(filenamebq);
   struct ggml_tensor * ts_c = tensor_import(filenamec);
+  struct ggml_tensor * ts_c_pim = tensor_import(filenamec_p);
   std::cout<<"ts_a:"<<std::endl;
   dump_tensor(ts_a, stdout);
   std::cout<<"ts_b:"<<std::endl;
@@ -31,6 +33,8 @@ int main(int argc, char** argv) {
   dump_tensor(ts_bq, stdout);
   std::cout<<"ts_c:"<<std::endl;
   dump_tensor(ts_c, stdout);
+  std::cout<<"ts_c_pim:"<<std::endl;
+  dump_tensor(ts_c_pim, stdout);
 
   //dump_tensor_first_n(ts_a, 4096, stdout);
   //dump_tensor_first_n(ts_bq, 4096, stdout);

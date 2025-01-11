@@ -9279,17 +9279,24 @@ static struct ggml_tensor * llm_build_par_gemv_op(
     (*none_q)->op = GGML_OP_NONE;
     (*none_q)->dpu_set = &(lctx.pim_context_map[WQ]->dpu_set);
     (*none_q)->inout_offset = (lctx.pim_context_map[WQ]->pim_metadata).input_offset;
+    (*none_q)->layerid = layer_idx;
 
     if (parallelism > 1) {
         GGML_ASSERT(none_k != NULL);
         *none_k = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
         (*none_k)->op = GGML_OP_NONE;
+	(*none_k)->dpu_set = &(lctx.pim_context_map[WQ]->dpu_set);
+	(*none_k)->inout_offset = (lctx.pim_context_map[WQ]->pim_metadata).input_offset;
+	(*none_k)->layerid = layer_idx;
     }
 
     if (parallelism == 3) {
         GGML_ASSERT(none_v != NULL);
         *none_v = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, cur->ne);
         (*none_v)->op = GGML_OP_NONE;
+	(*none_v)->dpu_set = &(lctx.pim_context_map[WQ]->dpu_set);
+	(*none_v)->inout_offset = (lctx.pim_context_map[WQ]->pim_metadata).input_offset;
+	(*none_v)->layerid = layer_idx;
     }
 
     struct ggml_tensor * par_tensor = ggml_gemv_par(ctx, w_q, w_k, w_v, cur, none_q, none_k, none_v, parallelism, layer_idx);
@@ -9335,13 +9342,13 @@ static struct ggml_tensor * llm_build_lora_mm(
 
 #ifdef PIM_KERNEL
 extern float ggml_table_f32_f16[1 << 16];
-int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_model *model, uint32_t offset_base) {
+int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_model *model, struct pim_meta *pim_metadata, uint32_t offset_base) {
   GGML_ASSERT(w_id < WCNT);
   struct dpu_set_t dpu;
   uint32_t nr_dpus;
   dpu_get_nr_dpus(dpu_set, &nr_dpus);
   ggml_tensor *w = NULL;
-  for (uint32_t layeridx = 0; layeridx < model->layers.size(); layeridx++) {
+  for (uint32_t layeridx = 0; layeridx < 1; layeridx++) {
     switch (w_id) {
     case WQ:
       w = model->layers[layeridx].wq;
@@ -9355,14 +9362,13 @@ int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_m
     // Only support occations that can divided evenly by the number of DPUs.
     GGML_ASSERT(w->ne[1] % nr_dpus == 0);
 
-    uint32_t rows_per_dpu = w->ne[1] / nr_dpus;
     uint32_t size_per_row = w->nb[1];
-    uint32_t layer_len = size_per_row * rows_per_dpu;
+    uint32_t layer_len = pim_metadata->layer_len;
     uint32_t i;
 
     // row is send to dpu
     DPU_FOREACH(dpu_set, dpu, i) {
-      uint32_t prev_rows_dpu = i * rows_per_dpu;
+      uint32_t prev_rows_dpu = i * pim_metadata->rows_per_dpu;
 
       // every dpu's data
       DPU_ASSERT(dpu_prepare_xfer(dpu_set, ((unsigned char *)w->data) + prev_rows_dpu*size_per_row));
@@ -9386,6 +9392,10 @@ int llama_load2dpu(struct llama_context *ctx, struct llama_model *model) {
     memset(pqcontext,0,sizeof(struct pim_context));
     DPU_ASSERT(dpu_alloc(NR_DPUS, NULL, &pqcontext->dpu_set));
     DPU_ASSERT(dpu_load(pqcontext->dpu_set, DPU_BINARY, NULL));
+
+    for (int uuu=0;uuu<16;uuu++) {
+        printf("ggml_table_f32_f16[%d]=%f\n",uuu,ggml_table_f32_f16[uuu]);
+    }
 
     //ggml_table_f32_f16 tbl is transferred to pim
     DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
@@ -9426,7 +9436,7 @@ int llama_load2dpu(struct llama_context *ctx, struct llama_model *model) {
     // load WQ weight data to dpu MRAM
     // row is  transposed
 
-    load_weight2dpu(WQ, pqcontext->dpu_set, model, pim_offset);
+    load_weight2dpu(WQ, pqcontext->dpu_set, model, &(pqcontext->pim_metadata), pim_offset);
     return 0;
 }
 #endif // PIM_KERNEL
@@ -9509,7 +9519,7 @@ static struct ggml_tensor * llm_build_ffn(
           llm_ffn_gate_type   type_gate,
          const llm_build_cb & cb,
                         int   il) {
-#ifdef PIM_KERNEL
+#if 0
     GGML_ASSERT(up != NULL && gate != NULL);
     // only consider LLM_FFN_PAR for PIM
     GGML_ASSERT(type_gate == LLM_FFN_PAR);
@@ -9637,7 +9647,7 @@ static struct ggml_tensor * llm_build_ffn(
     }
 
     if (down) {
-#ifdef PIM_KERNEL
+#if 0
         struct ggml_tensor * gemv_res;
         llm_build_gemv_op(ctx, lctx, down, cur, &gemv_res, il);
         cur = gemv_res;
@@ -10734,7 +10744,7 @@ struct llm_build_context {
             {
                 // rope freq factors for llama3; may return nullptr for llama2 and other models
                 struct ggml_tensor * rope_factors = build_rope_factors(il);
-#ifdef PIM_KERNEL
+#if 0
                 // don't support lora in PIM kernel
                 GGML_ASSERT(lctx.lora_adapters.size() == 0);
                 struct ggml_tensor * Qcur;
@@ -10751,6 +10761,13 @@ struct llm_build_context {
 
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
+
+                if (il == 0 && Qcur->op == GGML_OP_MUL_MAT && n_tokens == 1) {
+                  Qcur->flags |= GGML_TENSOR_FLAG_PIM;
+                  Qcur->dpu_set = &(lctx.pim_context_map[WQ]->dpu_set);
+                  Qcur->inout_offset = (lctx.pim_context_map[WQ]->pim_metadata).input_offset;
+                  Qcur->layerid = il;
+                }
 
                 struct ggml_tensor * Kcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wk, cur);
 
