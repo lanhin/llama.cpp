@@ -12581,6 +12581,8 @@ static void ggml_compute_forward_mul_mat(
 UseGgmlGemm1:;
 #endif
 
+    struct ggml_tensor * pim_res = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
+
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
 
@@ -12613,12 +12615,29 @@ UseGgmlGemm1:;
 	if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
           dpu_launch_gemv_async(src1, wdata, src0, dst, 0);
           dpu_kernel_barrier(*(dst->dpu_set));
+
+          pim_res->type = dst->type;
+          pim_res->dpu_set = dst->dpu_set;
+          pim_res->inout_offset = dst->inout_offset;
+          pim_res->ne[0] = dst->ne[0];
+          pim_res->ne[1] = dst->ne[1];
+          pim_res->ne[2] = dst->ne[2];
+          pim_res->ne[3] = dst->ne[3];
+          pim_res->nb[0] = ggml_type_size(dst->type);
+          pim_res->nb[1] = nbw1;
+          pim_res->nb[2] = nbw2;
+          pim_res->nb[3] = nbw3;
+          pim_res->data = malloc(ggml_nbytes(pim_res));
+          GGML_ASSERT(pim_res->data != NULL);
+          dpu_get_gemv_res(src1, src0, pim_res);
           dpu_get_gemv_res(src1, src0, dst);
+
           if (to_export && !exported) {
             tensor_export(dst, filenamec_pim);
           }
           return;
         }
+
         if (to_export && !exported) {
           struct ggml_tensor * quant_src1 = (struct ggml_tensor *)malloc(sizeof(struct ggml_tensor));
           const char* quant_name = "token_quantified";
@@ -12758,6 +12777,11 @@ UseGgmlGemm2:;
     if (to_export && !exported) {
       tensor_export(dst, filenamec);
       exported = true;
+    }
+
+    if (dst->flags & GGML_TENSOR_FLAG_PIM){
+      struct tensor_differ td = max_diff(pim_res, dst);
+      printf("Diff - max_abs = %f, diff_sum = %f, diff_abs_sum = %f\n", td.max_abs_diff, td.diff_sum, td.diff_abs_sum);
     }
 }
 
@@ -17341,18 +17365,12 @@ static int dpu_launch_gemv_async(
     uint32_t input_offset = res->inout_offset;
     dpu_set = *(res->dpu_set);
     // broadcast input metadata
-    DPU_FOREACH(dpu_set, dpu, i) {
-        DPU_ASSERT(dpu_prepare_xfer(dpu, &input_descript));
-    }
-    DPU_ASSERT(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset , sizeof(pim_matrix_des), DPU_XFER_DEFAULT));
+    DPU_ASSERT(dpu_broadcast_to(dpu_set, DPU_MRAM_HEAP_POINTER_NAME, input_offset, &input_descript, sizeof(pim_matrix_des), DPU_XFER_DEFAULT));
     input_offset += sizeof(pim_matrix_des);
 
     // broadcast input data
     uint32_t bclen = ggml_row_size(vec_dot_type, input->ne[0])*input->ne[1]*input->ne[2]*input->ne[3];
-    DPU_FOREACH(dpu_set, dpu, i) {
-        DPU_ASSERT(dpu_prepare_xfer(dpu, wdata));
-    }
-    DPU_ASSERT(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, input_offset, bclen, DPU_XFER_DEFAULT));
+    DPU_ASSERT(dpu_broadcast_to(dpu_set, DPU_MRAM_HEAP_POINTER_NAME, input_offset, wdata, bclen, DPU_XFER_DEFAULT));
     input_offset += bclen;
 
     res->inout_offset = input_offset;
@@ -17377,7 +17395,11 @@ static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_te
     struct dpu_set_t dpu_set, dpu;
     float *mul_max_res = (float *)res->data;
     uint32_t output_offset = res->inout_offset;
-    printf("%s: offset = %d\n", __FUNCTION__, output_offset);
+    static bool offset_printed = false;
+    if( !offset_printed) {
+      printf("%s: offset = %d  ", __FUNCTION__, output_offset);
+      offset_printed = true;
+    }
     dpu_set = *(res->dpu_set);
     int nr_dpus;
     dpu_get_nr_dpus(dpu_set, &nr_dpus);

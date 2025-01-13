@@ -181,25 +181,28 @@ int main() {
             mram2wram(pinput, pinput_cache, sizeof(block_q8_0)*nb);
 #if PRINT
             printf("input:\n");
-            printf("d=%u\n",pinput[0].d);
-            for (int kkk=0;kkk<QK8_0;kkk++) {
-                printf("%d ",pinput[0].qs[kkk]);
-            }
+            for (int i = 0; i < nb; i++) {
+              printf("d=%u\n",pinput[i].d);
+              for (int kkk=0;kkk<QK8_0;kkk++) {
+                printf("%d ",pinput[i].qs[kkk]);
+              }
             printf("\n");
+            }
+            printf("pweight_base: %p\n", pweight_base);
 #endif
             for(int k = 0;k < weight_rows_cur_thread;k++) {
                 //block_q4_0 *pqlayer0weight = (block_q4_0 *)(weightmetadatabase + sizeof(struct pim_meta) + cache_meta->layer_len*k);
                 __mram_ptr block_q4_0 *pweight = pweight_base + pinputcache->layerid*cache_meta->layer_len + k*nb;
                 mram2wram(pweight, pweight_cache, sizeof(block_q4_0)*nb);
 #if PRINT
-                if (k == 0) {
-                    printf("pweight_cache[0].d=%d\n",pweight_cache[0].d);
-                    for (int kkk=0;kkk<QK4_0/2;kkk++) {
-		      int v0 = (pweight_cache[0].qs[kkk] & 0x0f) - 8;
-		      int v1 = (pweight_cache[0].qs[kkk]  >> 4) - 8;
-
-		      printf("pweight_cache[0].qs=%d, %d\n",v0, v1);
-		    }
+                if (k % 64 == 0) {
+                  printf("pweight_cache[%d].d=%d\n pweight_cache[%d].qs=", k*128, pweight_cache[0].d, k*128);
+                  for (int kkk=0;kkk<QK4_0/2;kkk++) {
+                    int v0 = (pweight_cache[0].qs[kkk] & 0x0f) - 8;
+                    int v1 = (pweight_cache[0].qs[kkk]  >> 4) - 8;
+                    printf(" %d, %d", v0, v1);
+                  }
+                  printf("\n");
                 }
 #endif
 
@@ -223,7 +226,7 @@ int main() {
 
     offset += (sizeof(pim_matrix_des) + input_row_size * input_cols);
 #if PRINT
-    for(int iii=512;iii<4096;iii+=128) {
+    for(int iii=0;iii<cache_meta->rows_per_dpu;iii+=128) {
         printf("psumf[%d]=%f\n",iii,psumf[iii]);
     }
 

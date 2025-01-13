@@ -229,7 +229,7 @@ void dump_tensor(const struct ggml_tensor * tensor, FILE * fout) {
     fprintf(fout, "\n");
 }
 
-float mul_add_q4_0_q8_0(struct ggml_tensor * a, struct ggml_tensor *b) {
+float mul_add_q4_0_q8_0(struct ggml_tensor * a, struct ggml_tensor * b) {
   GGML_ASSERT(a->type == GGML_TYPE_Q4_0);
   GGML_ASSERT(b->type == GGML_TYPE_Q8_0);
   const block_q4_0 *x = a->data;
@@ -253,4 +253,30 @@ float mul_add_q4_0_q8_0(struct ggml_tensor * a, struct ggml_tensor *b) {
     res += sumi*GGML_FP16_TO_FP32(x[ib].d)*GGML_FP16_TO_FP32(y[ib].d);
   }
   return res;
+}
+
+struct tensor_differ max_diff(struct ggml_tensor * a, struct ggml_tensor * b) {
+  struct tensor_differ res_diff;
+  res_diff.max_abs_diff = 0;
+  res_diff.diff_sum = 0;
+  res_diff.diff_abs_sum = 0;
+
+  GGML_ASSERT(a->type == b->type);
+  for (int i=0; i < GGML_MAX_DIMS; i++) {
+    GGML_ASSERT(a->ne[i] == b->ne[i]);
+  }
+
+  switch(a->type){
+  case GGML_TYPE_F32:
+    for (int i=0; i < ggml_nelements(a); i++) {
+      float diff = ggml_get_f32_1d(a, i) - ggml_get_f32_1d(b, i);
+      res_diff.max_abs_diff = fmax(fabs(diff), res_diff.max_abs_diff);
+      res_diff.diff_sum += diff;
+      res_diff.diff_abs_sum += fabs(diff);
+    }
+    break;
+  default:
+    break;
+  }
+  return res_diff;
 }

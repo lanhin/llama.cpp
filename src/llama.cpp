@@ -9366,12 +9366,14 @@ int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_m
     uint32_t layer_len = pim_metadata->layer_len;
     uint32_t i;
 
+    printf("%s: size_per_row: %d, rows_per_dpu: %d, offset_base: %d, layer_len: %d\n", __FUNCTION__, size_per_row, pim_metadata->rows_per_dpu, offset_base, layer_len);
+
     // row is send to dpu
     DPU_FOREACH(dpu_set, dpu, i) {
       uint32_t prev_rows_dpu = i * pim_metadata->rows_per_dpu;
 
       // every dpu's data
-      DPU_ASSERT(dpu_prepare_xfer(dpu_set, ((unsigned char *)w->data) + prev_rows_dpu*size_per_row));
+      DPU_ASSERT(dpu_prepare_xfer(dpu, ((unsigned char *)w->data) + prev_rows_dpu*size_per_row));
     }
 
     DPU_ASSERT(dpu_push_xfer(dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, offset_base + layer_len*layeridx, layer_len, DPU_XFER_DEFAULT));
@@ -9380,7 +9382,7 @@ int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_m
 }
 
 int llama_load2dpu(struct llama_context *ctx, struct llama_model *model) {
-    #define NR_DPUS 1
+    #define NR_DPUS 64
     #define DPU_BINARY "./dpu/gemv_dpu"
     uint32_t nr_of_dpus;
     uint32_t pim_offset = 0;
@@ -9398,13 +9400,8 @@ int llama_load2dpu(struct llama_context *ctx, struct llama_model *model) {
     }
 
     //ggml_table_f32_f16 tbl is transferred to pim
-    DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
-        // transfer to dpu
-        DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, (void *)(ggml_table_f32_f16)));
-    }
-    uint32_t tbl_len = sizeof(ggml_table_f32_f16);
-    DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, tbl_len, DPU_XFER_DEFAULT));
-    pim_offset += tbl_len;
+    DPU_ASSERT(dpu_broadcast_to(pqcontext->dpu_set, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, (void *)(ggml_table_f32_f16), sizeof(ggml_table_f32_f16), DPU_XFER_DEFAULT));
+    pim_offset += sizeof(ggml_table_f32_f16);
     // WQID = 1
 
     ctx->pim_context_map[WQ] = pqcontext;
@@ -9427,11 +9424,7 @@ int llama_load2dpu(struct llama_context *ctx, struct llama_model *model) {
     pqcontext->pim_metadata.input_offset = sizeof(ggml_table_f32_f16) + sizeof(struct pim_meta) + pqcontext->pim_metadata.layer_len * n_layer;
 
     //Todo: NR_DPUS contexts are dispatched to different dpus(rest row is different on different dpu)
-    DPU_FOREACH(pqcontext->dpu_set, dpu, i) {
-    // transfer to dpu
-        DPU_ASSERT(dpu_prepare_xfer(pqcontext->dpu_set, (void *)(&pqcontext->pim_metadata)));
-    }
-    DPU_ASSERT(dpu_push_xfer(pqcontext->dpu_set, DPU_XFER_TO_DPU, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, sizeof(struct pim_meta), DPU_XFER_DEFAULT));
+    DPU_ASSERT(dpu_broadcast_to(pqcontext->dpu_set, DPU_MRAM_HEAP_POINTER_NAME, pim_offset, &(pqcontext->pim_metadata), sizeof(struct pim_meta), DPU_XFER_DEFAULT));
     pim_offset += sizeof(struct pim_meta);
     // load WQ weight data to dpu MRAM
     // row is  transposed
