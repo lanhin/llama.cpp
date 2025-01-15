@@ -12541,7 +12541,8 @@ static void ggml_compute_forward_mul_mat(
     //   compute by src0 rows
 
     // export the first gemv's tensor
-    if (type == GGML_TYPE_Q4_0 && src1->type == GGML_TYPE_F32 &&
+    if (dst->flags & GGML_TENSOR_FLAG_PIM &&
+        type == GGML_TYPE_Q4_0 && src1->type == GGML_TYPE_F32 &&
         ne00 == 4096 && ne01 == 4096 &&
         ne02 == 1 && ne03 == 1 &&
         ne10 == 4096 && ne11 == 1 &&
@@ -12613,7 +12614,7 @@ UseGgmlGemm1:;
         }
 
 	if ((dst->flags & GGML_TENSOR_FLAG_PIM)) {
-          dpu_launch_gemv_async(src1, wdata, src0, dst, 0);
+          dpu_launch_gemv_async(src1, wdata, src0, dst, dst->layerid);
           dpu_kernel_barrier(*(dst->dpu_set));
 
           pim_res->type = dst->type;
@@ -17404,6 +17405,9 @@ static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_te
     int nr_dpus;
     dpu_get_nr_dpus(dpu_set, &nr_dpus);
     int rows_per_dpu = w->ne[1] / nr_dpus;
+
+    // Only support vector as input
+    GGML_ASSERT(input->ne[1] == 1);
 
     uint32_t i;
     DPU_FOREACH(dpu_set, dpu, i) {

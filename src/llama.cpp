@@ -9348,7 +9348,7 @@ int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_m
   uint32_t nr_dpus;
   dpu_get_nr_dpus(dpu_set, &nr_dpus);
   ggml_tensor *w = NULL;
-  for (uint32_t layeridx = 0; layeridx < 1; layeridx++) {
+  for (uint32_t layeridx = 0; layeridx < pim_metadata->layer_num; layeridx++) {
     switch (w_id) {
     case WQ:
       w = model->layers[layeridx].wq;
@@ -9366,7 +9366,7 @@ int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_m
     uint32_t layer_len = pim_metadata->layer_len;
     uint32_t i;
 
-    printf("%s: size_per_row: %d, rows_per_dpu: %d, offset_base: %d, layer_len: %d\n", __FUNCTION__, size_per_row, pim_metadata->rows_per_dpu, offset_base, layer_len);
+    printf("%s: size_per_row: %d, rows_per_dpu: %d, offset_base (the 1st weight base): %d, layer_len: %d, layer_id: %d/%d\n", __FUNCTION__, size_per_row, pim_metadata->rows_per_dpu, offset_base, layer_len, layeridx, pim_metadata->layer_num);
 
     // row is send to dpu
     DPU_FOREACH(dpu_set, dpu, i) {
@@ -9382,8 +9382,6 @@ int load_weight2dpu(enum WeightId w_id, struct dpu_set_t dpu_set, struct llama_m
 }
 
 int llama_load2dpu(struct llama_context *ctx, struct llama_model *model) {
-    #define NR_DPUS 64
-    #define DPU_BINARY "./dpu/gemv_dpu"
     uint32_t nr_of_dpus;
     uint32_t pim_offset = 0;
     int i;
@@ -9409,7 +9407,7 @@ int llama_load2dpu(struct llama_context *ctx, struct llama_model *model) {
     // WQ metadata is loaded to dpu WRAM, make WQ's param in every layer is same
 
     //uint32_t n_layer = model->layers.size();
-    uint32_t n_layer = 1;
+    uint32_t n_layer = NR_LAYER;
     uint32_t il = 0;
     dpu_get_nr_dpus(pqcontext->dpu_set, &nr_of_dpus);
     pqcontext->pim_metadata.layer_num = n_layer;
@@ -10755,7 +10753,7 @@ struct llm_build_context {
                 // compute Q and K and RoPE them
                 struct ggml_tensor * Qcur = llm_build_lora_mm(lctx, ctx0, model.layers[il].wq, cur);
 
-                if (il == 0 && Qcur->op == GGML_OP_MUL_MAT && n_tokens == 1) {
+                if (il < NR_LAYER && Qcur->op == GGML_OP_MUL_MAT && n_tokens == 1) {
                   Qcur->flags |= GGML_TENSOR_FLAG_PIM;
                   Qcur->dpu_set = &(lctx.pim_context_map[WQ]->dpu_set);
                   Qcur->inout_offset = (lctx.pim_context_map[WQ]->pim_metadata).input_offset;

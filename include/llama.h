@@ -424,6 +424,9 @@ extern "C" {
             struct llama_context_params   params);
 
 #ifdef PIM_KERNEL
+#define NR_DPUS 64
+#define NR_LAYER 2
+#define DPU_BINARY "./dpu/gemv_dpu"
   enum WeightId {
     WQ,
     WCNT

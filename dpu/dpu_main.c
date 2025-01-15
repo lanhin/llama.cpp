@@ -107,8 +107,9 @@ int main() {
     ptable_f32_f16 = (__mram_ptr float *)DPU_MRAM_HEAP_POINTER;
     uint32_t table_f32_f16_len = (1 << 16)*sizeof(float);
     uint32_t offset = table_f32_f16_len;
-    int input_row_size,input_cols;
-    float *psumf;
+    int input_row_size = 0;
+    int input_cols = 0;
+    float *psumf = NULL;
 
 #if PRINT
     printf("table_f32_f16_len=%d\n",table_f32_f16_len);
@@ -124,7 +125,7 @@ int main() {
     mram_read((__mram_ptr void const*) (weightmetadatabase), cache_meta, sizeof(struct pim_meta));
 
 #if PRINT
-    printf("layer_num: %d, weight_type=%d,rows_per_dpu=%d,rest_rows=%d,input_offset=%d",
+    printf("layer_num: %d, weight_type=%d, rows_per_dpu=%d, rest_rows=%d, input_offset=%d",
         cache_meta->layer_num,cache_meta->weight_type,cache_meta->rows_per_dpu,cache_meta->rest_rows,cache_meta->input_offset);
 #endif
 
@@ -142,14 +143,15 @@ int main() {
     //input metadata
     offset += (cache_meta->layer_len * cache_meta->layer_num);
 #if PRINT
-    printf("layer_len=%d,offset=%d\n",cache_meta->layer_len,offset);
+    printf("layer_len=%d, input metadata offset=%d\n",cache_meta->layer_len,offset);
 #endif
     uint32_t inputmetadatabase = weightmetadatabase + sizeof(struct pim_meta) + cache_meta->layer_len * cache_meta->layer_num;   
     pim_matrix_des *pinputcache = (pim_matrix_des *) mem_alloc(sizeof(pim_matrix_des));
     mram_read((__mram_ptr void const*) (inputmetadatabase), pinputcache, sizeof(pim_matrix_des));
     input_cols = pinputcache->ne[1];
+    assert(input_cols == 1 && "Only support vector as input.");
 #if PRINT
-    printf("input_type=%d,layerID=%d\n",pinputcache->type,pinputcache->layerid);
+    printf("input_type=%d, layerID=%d\n",pinputcache->type,pinputcache->layerid);
     for(int nn=0;nn<GGML_MAX_DIMS;nn++) {
         printf("ne[%d]=%lld\n",nn,pinputcache->ne[nn]);
     }
@@ -165,19 +167,19 @@ int main() {
         int nb = pinputcache->ne[0]/QK8_0;
         int qk = QK8_0;
         input_row_size = nb*sizeof(block_q8_0);
-        __mram_ptr block_q4_0 *pweight_base = (__mram_ptr  block_q4_0 *)(weightmetadatabase + sizeof(struct pim_meta));
-        __mram_ptr block_q8_0 *pinput_base = (__mram_ptr block_q8_0 *)(DPU_MRAM_HEAP_POINTER + cache_meta->input_offset + sizeof(pim_matrix_des));
+        __mram_ptr void *pweight_base = (__mram_ptr void *)(weightmetadatabase + sizeof(struct pim_meta));
+        __mram_ptr void *pinput_base = DPU_MRAM_HEAP_POINTER + cache_meta->input_offset + sizeof(pim_matrix_des);
         psumf = (float *)mem_alloc(sizeof(float)*input_cols*weight_rows_cur_thread);
         memset(psumf, 0 ,sizeof(float)*input_cols*weight_rows_cur_thread);
 #if PRINT
-        printf("input_cols=%d,rows_cur_thread=%d,nb=%d,input_row_size=%d\n",input_cols,weight_rows_cur_thread,nb,input_row_size);
+        printf("input_cols=%d, rows_cur_thread=%d, nb=%d, input_row_size=%d\n",input_cols,weight_rows_cur_thread,nb,input_row_size);
 #endif
         block_q4_0 *pweight_cache = (block_q4_0 *) mem_alloc(sizeof(block_q4_0)*nb);
         block_q8_0 *pinput_cache = (block_q8_0 *) mem_alloc(sizeof(block_q8_0)*nb);          
 
         // weight_rows_cur_thread = 16;
         for(int l = 0;l < input_cols;l++) {
-            __mram_ptr block_q8_0 *pinput = pinput_base + l*nb;
+          __mram_ptr block_q8_0 *pinput = pinput_base + l*nb*sizeof(block_q8_0);
             mram2wram(pinput, pinput_cache, sizeof(block_q8_0)*nb);
 #if PRINT
             printf("input:\n");
@@ -191,8 +193,7 @@ int main() {
             printf("pweight_base: %p\n", pweight_base);
 #endif
             for(int k = 0;k < weight_rows_cur_thread;k++) {
-                //block_q4_0 *pqlayer0weight = (block_q4_0 *)(weightmetadatabase + sizeof(struct pim_meta) + cache_meta->layer_len*k);
-                __mram_ptr block_q4_0 *pweight = pweight_base + pinputcache->layerid*cache_meta->layer_len + k*nb;
+              __mram_ptr block_q4_0 *pweight = pweight_base + pinputcache->layerid*cache_meta->layer_len + k*nb*sizeof(block_q4_0);
                 mram2wram(pweight, pweight_cache, sizeof(block_q4_0)*nb);
 #if PRINT
                 if (k % 64 == 0) {
@@ -207,11 +208,10 @@ int main() {
 #endif
 
                 for (int i = 0; i < nb; i++) {
-                    //printf("input_col:%d,weight_row:%d\n",l,k);
+                    //printf("input_col:%d, current inner weight row idx:%d\n",l,k);
 
                     int sumi = 0;
                     for (int j = 0; j < qk/2; ++j) {
-                        //printf("nb:%d,qk=%d,qs=%d\n",i,j,pweight_cache[i].qs[j]);
                         const int v0 = (pweight_cache[i].qs[j] & 0x0F) - 8;
                         const int v1 = (pweight_cache[i].qs[j] >>   4) - 8;
 
@@ -230,9 +230,10 @@ int main() {
         printf("psumf[%d]=%f\n",iii,psumf[iii]);
     }
 
-    printf("offset=%d\n",offset);
+    printf("output offset=%d\n",offset);
 #endif
     // Write C Matrix to current MRAM block
-    wram2mram((__mram_ptr void *) (DPU_MRAM_HEAP_POINTER + offset),psumf,sizeof(float)*input_cols*weight_rows_cur_thread);
+    // Note: with input_cols > 1, the results should be rearranged on host
+    wram2mram((__mram_ptr void *) (DPU_MRAM_HEAP_POINTER + offset), psumf, sizeof(float)*input_cols*weight_rows_cur_thread);
     return 0;
 }
