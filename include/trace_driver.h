@@ -18,7 +18,7 @@ extern "C" {
   extern float ggml_table_f32_f16[1 << 16];
 
   void tensor_export(const struct ggml_tensor * tensor, const char * fname);
-struct ggml_tensor * tensor_import(const char * fname);
+  struct ggml_tensor * tensor_import(const char * fname);
   void dump_tensor_first_n(const struct ggml_tensor * tensor, int n, FILE * fout);
   void dump_tensor(const struct ggml_tensor * tensor, FILE * fout);
 
