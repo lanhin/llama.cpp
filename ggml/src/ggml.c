@@ -17394,7 +17394,7 @@ static __inline__ void dpu_kernel_barrier(struct dpu_set_t dpu_set) {
 
 static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_tensor *w, struct ggml_tensor *res) {
     struct dpu_set_t dpu_set, dpu;
-    float *mul_max_res = (float *)res->data;
+    float *mul_mat_res = (float *)res->data;
     uint32_t output_offset = res->inout_offset;
     static bool offset_printed = false;
     if( !offset_printed) {
@@ -17411,7 +17411,7 @@ static __inline__ int dpu_get_gemv_res(struct ggml_tensor *input, struct ggml_te
 
     uint32_t i;
     DPU_FOREACH(dpu_set, dpu, i) {
-        DPU_ASSERT(dpu_prepare_xfer(dpu, mul_max_res + i * rows_per_dpu*input->ne[1]));
+        DPU_ASSERT(dpu_prepare_xfer(dpu, mul_mat_res + i * rows_per_dpu*input->ne[1]));
     }
     DPU_ASSERT(dpu_push_xfer(dpu_set, DPU_XFER_FROM_DPU, DPU_MRAM_HEAP_POINTER_NAME, output_offset, rows_per_dpu*input->ne[1]*sizeof(float), DPU_XFER_DEFAULT));
     return 0;
